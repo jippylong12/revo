@@ -16,3 +16,5 @@ repos/
 
 # Launch materials (marketing)
 /launch/
+.memory/
+.docs/
