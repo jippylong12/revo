@@ -82,7 +82,13 @@ cmd_clone() {
         local clone_err
         if clone_err=$(git clone --quiet "$url" "$full_path" 2>&1); then
             ui_spinner_stop
-            ui_step_done "Cloned:" "$path"
+            # Detect and store the repo's default branch
+            local detected_branch
+            detected_branch=$(git_default_branch "$full_path")
+            if [[ -n "$detected_branch" ]]; then
+                YAML_REPO_BRANCHES[$repo]="$detected_branch"
+            fi
+            ui_step_done "Cloned:" "$path (branch: ${detected_branch:-$YAML_DEFAULTS_BRANCH})"
             success_count=$((success_count + 1))
         else
             ui_spinner_error "Failed to clone: $path"
@@ -93,9 +99,12 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
-    # Always regenerate the workspace CLAUDE.md after a clone batch so that
-    # newly cloned repos appear in the context immediately.
+    # Persist any newly detected per-repo branches and regenerate CLAUDE.md
+    # so newly cloned repos appear in the context immediately.
     if [[ $fail_count -eq 0 ]] && { [[ $success_count -gt 0 ]] || [[ $skip_count -gt 0 ]]; }; then
+        if [[ $success_count -gt 0 ]]; then
+            config_save
+        fi
         context_regenerate_silent
     fi
 

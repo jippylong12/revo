@@ -1,5 +1,54 @@
 # Changelog
 
+## [0.6.1] - 2026-04-10
+
+### Added
+- Per-repo default branch tracking. Repos that use `master` (or any
+  non-`main` default) are now detected and stored in `revo.yaml` via an
+  optional `branch:` field. Detection runs automatically during `revo init`,
+  `revo detect`, `revo clone`, and `revo context` (backfills existing
+  workspaces).
+- `revo checkout default` — checks out each repo's own default branch,
+  so mixed `main`/`master` workspaces just work.
+- `git_default_branch` helper that resolves via `symbolic-ref`, then
+  falls back to `origin/main` → `origin/master` → current HEAD.
+- The auto-generated `CLAUDE.md` now shows **Default branch: master**
+  (or whatever it is) for repos whose default differs from the workspace
+  default, so Claude Code knows which branch to target.
+
+### Fixed
+- `revo feature` no longer fails with `printf: - : invalid option` when
+  writing the feature context file. Format strings starting with `-` now
+  use `printf --` consistently.
+
+## [0.6.0] - 2026-04-09
+
+### Added
+- `revo workspace <name> [--tag TAG]` — creates a full-copy isolated
+  workspace under `.revo/workspaces/<name>/` on a `feature/<name>` branch.
+  Unlike git worktrees, workspaces hardlink-copy *everything* — `.env`,
+  `node_modules`, build artifacts — so Claude can start work with zero
+  bootstrap. Uses `cp -RLl` (hardlinks, follows symlinks) where possible
+  and falls back to a real copy if hardlinks fail. Refuses to create a
+  workspace unless `.revo/` is in `.gitignore` (override with `--force`)
+  so secrets don't leak via the parent git repo.
+- `revo workspaces` — table listing of active workspaces with branch,
+  age, repo count, and dirty state.
+- `revo workspace <name> --delete [--force]` — removes a workspace.
+  Refuses if any repo has unpushed commits or uncommitted changes unless
+  `--force` is passed.
+- `revo workspace --clean` — removes workspaces whose current branches
+  are already merged into the workspace default branch (or its
+  `origin/<default>` counterpart).
+- `revo` invoked from inside `.revo/workspaces/<name>/` now automatically
+  operates on that workspace's repo copies rather than the source tree
+  under `repos/`. `REVO_ACTIVE_WORKSPACE` is set in this case so future
+  commands can detect the workspace context.
+- The auto-generated workspace `CLAUDE.md` now documents the workspace
+  commands and lists active workspaces under `## Active Workspaces` so
+  Claude Code discovers them on its own. Each workspace also gets its
+  own slim `CLAUDE.md` orienting the agent inside the isolated copy.
+
 ## [0.5.0] - 2026-04-09
 
 ### Added

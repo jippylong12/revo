@@ -108,10 +108,10 @@ cmd_feature() {
             printf '# Feature: %s\n' "$name"
             printf '\n'
             printf '## Status\n'
-            printf '- Created: %s\n' "$timestamp"
-            printf '- Branch: %s\n' "$branch"
+            printf -- '- Created: %s\n' "$timestamp"
+            printf -- '- Branch: %s\n' "$branch"
             if [[ -n "$tag" ]]; then
-                printf '- Tag filter: %s\n' "$tag"
+                printf -- '- Tag filter: %s\n' "$tag"
             fi
             printf '\n'
             printf '## Repos\n'

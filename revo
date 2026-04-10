@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.5.0"
+REVO_VERSION="0.6.1"
 
 # Determine script directory for sourcing libs
 REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -37,6 +37,7 @@ if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
     source "$REVO_SCRIPT_DIR/lib/commands/push.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/pr.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/issue.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/workspace.sh"
 fi
 # In bundled mode, all functions are already in this file
 
@@ -67,6 +68,10 @@ Claude-first commands:
   pr TITLE [--tag TAG]        Create coordinated PRs via gh CLI
   issue list [options]        List issues across workspace repos
   issue create [options] TITLE Create issue(s) in workspace repos
+  workspace NAME [--tag TAG]  Create a full-copy workspace under .revo/workspaces/
+  workspace NAME --delete     Delete a workspace (use --force to discard work)
+  workspace --clean           Remove workspaces whose branches are merged
+  workspaces                  List active workspaces
 
 Options:
   --tag TAG       Filter repositories by tag
@@ -92,6 +97,10 @@ Examples:
   revo issue list --tag backend --json               # JSON for Claude/jq
   revo issue create --repo backend "Add stats endpoint"
   revo issue create --tag mobile --feature stats "Add statistics screen"
+  revo workspace clock-student                    # full copy of all repos
+  revo workspace clock-student --tag backend      # only backend repos
+  revo workspaces                                 # list active workspaces
+  revo workspace clock-student --delete           # remove when done
 
 Documentation: https://github.com/jippylong12/revo
 EOF
@@ -162,6 +171,12 @@ main() {
             ;;
         issue|issues)
             cmd_issue "$@"
+            ;;
+        workspace)
+            cmd_workspace "$@"
+            ;;
+        workspaces)
+            cmd_workspaces "$@"
             ;;
         --help|-h|help)
             show_help

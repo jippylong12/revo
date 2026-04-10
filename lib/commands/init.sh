@@ -201,8 +201,10 @@ cmd_init() {
             fi
 
             tags=$(_init_auto_tags "$dir" "$name")
-            yaml_add_repo "$remote" "$path" "$tags" ""
-            ui_step_done "Detected:" "$name → $remote"
+            local branch
+            branch=$(git_default_branch "$dir")
+            yaml_add_repo "$remote" "$path" "$tags" "" "$branch"
+            ui_step_done "Detected:" "$name → $remote (branch: $branch)"
             detected_count=$((detected_count + 1))
         done <<< "$_INIT_FOUND_DIRS"
 

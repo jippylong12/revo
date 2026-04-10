@@ -14,6 +14,7 @@ YAML_REPO_URLS=()
 YAML_REPO_PATHS=()
 YAML_REPO_TAGS=()
 YAML_REPO_DEPS=()
+YAML_REPO_BRANCHES=()
 
 yaml_parse() {
     local file="$1"
@@ -30,6 +31,7 @@ yaml_parse() {
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
     YAML_REPO_DEPS=()
+    YAML_REPO_BRANCHES=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -83,6 +85,7 @@ yaml_parse() {
                 YAML_REPO_PATHS[$current_index]=$(yaml_path_from_url "$url")
                 YAML_REPO_TAGS[$current_index]=""
                 YAML_REPO_DEPS[$current_index]=""
+                YAML_REPO_BRANCHES[$current_index]=""
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
             fi
@@ -106,6 +109,8 @@ yaml_parse() {
                     deps_str="${deps_str//\"/}"
                     deps_str="${deps_str//\'/}"
                     YAML_REPO_DEPS[$current_index]="$deps_str"
+                elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
+                    YAML_REPO_BRANCHES[$current_index]="${BASH_REMATCH[1]}"
                 fi
             fi
         fi
@@ -181,6 +186,12 @@ yaml_get_deps() {
     printf '%s' "${YAML_REPO_DEPS[$idx]:-}"
 }
 
+# Get repo default branch by index (empty means use workspace default)
+yaml_get_branch() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_BRANCHES[$idx]:-}"
+}
+
 # Find repo index by name (path basename)
 # Usage: idx=$(yaml_find_by_name "backend")
 # Returns: index or -1 if not found
@@ -214,6 +225,7 @@ yaml_write() {
             local path="${YAML_REPO_PATHS[$i]}"
             local tags="${YAML_REPO_TAGS[$i]}"
             local deps="${YAML_REPO_DEPS[$i]:-}"
+            local branch="${YAML_REPO_BRANCHES[$i]:-}"
 
             printf '  - url: %s\n' "$url"
 
@@ -233,6 +245,11 @@ yaml_write() {
             if [[ -n "$deps" ]]; then
                 printf '    depends_on: [%s]\n' "$deps"
             fi
+
+            # Write branch if it differs from the workspace default
+            if [[ -n "$branch" ]] && [[ "$branch" != "$YAML_DEFAULTS_BRANCH" ]]; then
+                printf '    branch: %s\n' "$branch"
+            fi
         done
 
         printf '\ndefaults:\n'
@@ -241,12 +258,13 @@ yaml_write() {
 }
 
 # Add a repo to the config
-# Usage: yaml_add_repo "url" "path" "tags" "deps"
+# Usage: yaml_add_repo "url" "path" "tags" "deps" ["branch"]
 yaml_add_repo() {
     local url="$1"
     local path="${2:-}"
     local tags="${3:-}"
     local deps="${4:-}"
+    local branch="${5:-}"
 
     local idx=$YAML_REPO_COUNT
 
@@ -258,6 +276,7 @@ yaml_add_repo() {
     YAML_REPO_PATHS[$idx]="$path"
     YAML_REPO_TAGS[$idx]="$tags"
     YAML_REPO_DEPS[$idx]="$deps"
+    YAML_REPO_BRANCHES[$idx]="$branch"
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }

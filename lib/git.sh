@@ -206,6 +206,34 @@ git_remote_url() {
     git -C "$repo_dir" remote get-url origin 2>/dev/null
 }
 
+# Detect the default branch for a cloned repo
+# Tries symbolic-ref first, then falls back to checking main/master
+# Usage: branch=$(git_default_branch "repo_dir")
+git_default_branch() {
+    local repo_dir="$1"
+    local ref
+
+    # Best source: what the remote says HEAD points to
+    ref=$(git -C "$repo_dir" symbolic-ref refs/remotes/origin/HEAD 2>/dev/null)
+    if [[ -n "$ref" ]]; then
+        printf '%s' "${ref##*/}"
+        return 0
+    fi
+
+    # Fallback: check which of main/master exists
+    if git -C "$repo_dir" rev-parse --verify origin/main >/dev/null 2>&1; then
+        printf '%s' "main"
+        return 0
+    fi
+    if git -C "$repo_dir" rev-parse --verify origin/master >/dev/null 2>&1; then
+        printf '%s' "master"
+        return 0
+    fi
+
+    # Last resort: whatever branch we're on
+    git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null
+}
+
 # Check if branch exists (local or remote)
 # Usage: if git_branch_exists "repo_dir" "branch_name"; then ...
 git_branch_exists() {

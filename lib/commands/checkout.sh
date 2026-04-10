@@ -70,6 +70,12 @@ cmd_checkout() {
             continue
         fi
 
+        # Resolve "default" to each repo's own default branch
+        local target="$branch_name"
+        if [[ "$target" == "default" ]]; then
+            target=$(config_repo_default_branch "$repo")
+        fi
+
         # Check for uncommitted changes
         if git_is_dirty "$full_path" && [[ $force -eq 0 ]]; then
             ui_step_error "Uncommitted changes: $path"
@@ -79,15 +85,15 @@ cmd_checkout() {
         fi
 
         # Check if branch exists
-        if ! git_branch_exists "$full_path" "$branch_name"; then
-            ui_step_error "Branch not found: $path"
+        if ! git_branch_exists "$full_path" "$target"; then
+            ui_step_error "Branch not found: $path ($target)"
             fail_count=$((fail_count + 1))
             continue
         fi
 
         # Checkout
-        if git_checkout "$full_path" "$branch_name"; then
-            ui_step_done "Checked out:" "$path → $branch_name"
+        if git_checkout "$full_path" "$target"; then
+            ui_step_done "Checked out:" "$path → $target"
             success_count=$((success_count + 1))
         else
             ui_step_error "Failed: $path - $GIT_ERROR"

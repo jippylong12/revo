@@ -27,7 +27,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.5.0"
+REVO_VERSION="0.6.1"
 
 HEADER
 
@@ -54,6 +54,7 @@ SOURCE_FILES=(
     "lib/commands/push.sh"
     "lib/commands/pr.sh"
     "lib/commands/issue.sh"
+    "lib/commands/workspace.sh"
 )
 
 # Append each source file, stripping shebang and comments at start

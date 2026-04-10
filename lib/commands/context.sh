@@ -182,6 +182,17 @@ _context_write_file() {
         url=$(yaml_get_url "$i")
         full_path="$REVO_REPOS_DIR/$path"
 
+        local branch
+        branch=$(yaml_get_branch "$i")
+
+        # Backfill: detect default branch for cloned repos that don't have one stored
+        if [[ -z "$branch" ]] && [[ -d "$full_path" ]]; then
+            branch=$(git_default_branch "$full_path")
+            if [[ -n "$branch" ]]; then
+                YAML_REPO_BRANCHES[$i]="$branch"
+            fi
+        fi
+
         {
             printf '### %s\n' "$path"
 
@@ -189,6 +200,9 @@ _context_write_file() {
                 printf -- '- **Tags:** %s\n' "$tags"
             fi
             printf -- '- **Path:** repos/%s\n' "$path"
+            if [[ -n "$branch" ]] && [[ "$branch" != "$YAML_DEFAULTS_BRANCH" ]]; then
+                printf -- '- **Default branch:** %s\n' "$branch"
+            fi
             if [[ -n "$deps" ]]; then
                 printf -- '- **Depends on:** %s\n' "$deps"
             fi
@@ -263,6 +277,35 @@ _context_write_file() {
         printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
     fi
 
+    # Active workspaces (any .revo/workspaces/*/ dirs)
+    local workspaces_dir="$REVO_WORKSPACE_ROOT/.revo/workspaces"
+    if [[ -d "$workspaces_dir" ]]; then
+        local has_workspaces=0
+        local ws
+        for ws in "$workspaces_dir"/*/; do
+            [[ -d "$ws" ]] || continue
+            if [[ $has_workspaces -eq 0 ]]; then
+                {
+                    printf '\n'
+                    printf '## Active Workspaces\n'
+                    printf '\n'
+                } >> "$output"
+                has_workspaces=1
+            fi
+            local ws_name
+            ws_name=$(basename "$ws")
+            printf -- '- **%s** — `.revo/workspaces/%s/` (branch: feature/%s)\n' \
+                "$ws_name" "$ws_name" "$ws_name" >> "$output"
+        done
+        if [[ $has_workspaces -eq 1 ]]; then
+            {
+                printf '\n'
+                printf 'Run `revo workspaces` for branch/dirty status, or `cd` into one\n'
+                printf 'and run revo from there to operate on the workspace copy.\n'
+            } >> "$output"
+        fi
+    fi
+
     # Active features (any .revo/features/*.md files)
     local features_dir="$REVO_WORKSPACE_ROOT/.revo/features"
     if [[ -d "$features_dir" ]]; then
@@ -300,6 +343,8 @@ _context_write_file() {
         printf '6. Use `revo commit "msg"` to commit across all repos at once\n'
         printf '7. Use `revo feature <name>` to start a coordinated feature workspace\n'
         printf '8. Use `revo pr "title"` to open coordinated pull requests\n'
+        printf '9. Use `revo workspace <name>` to get a full-copy isolated workspace\n'
+        printf '   under `.revo/workspaces/<name>/` (zero bootstrap, .env included)\n'
         printf '\n'
         printf '## Workspace Tool: revo\n'
         printf '\n'
@@ -323,6 +368,17 @@ _context_write_file() {
         printf -- '- `revo pr "title" [--tag t]` — create coordinated PRs via gh CLI\n'
         printf -- '- `revo exec "cmd" [--tag t]` — run command in filtered repos\n'
         printf -- '- `revo checkout <branch> [--tag t]` — switch branch across repos\n'
+        printf '\n'
+        printf '**Workspaces (full-copy isolated workspaces):**\n'
+        printf -- '- `revo workspace <name> [--tag t]` — full copy of repos into `.revo/workspaces/<name>/` on `feature/<name>`\n'
+        printf -- '- `revo workspaces` — list active workspaces with branch and dirty state\n'
+        printf -- '- `revo workspace <name> --delete [--force]` — remove a workspace\n'
+        printf -- '- `revo workspace --clean` — remove workspaces whose branches are merged\n'
+        printf '\n'
+        printf 'Workspaces hardlink-copy everything (including `.env`, `node_modules`,\n'
+        printf 'build artifacts) so Claude can start work with zero bootstrap. Run\n'
+        printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
+        printf 'workspace copies, not the source tree.\n'
         printf '\n'
         printf '**Issues (cross-repo, via gh CLI):**\n'
         printf -- '- `revo issue list [--tag t] [--state open|closed|all] [--label L] [--json]` — list issues across repos\n'
@@ -392,6 +448,8 @@ cmd_context() {
 
     ui_spinner_start "Scanning $YAML_REPO_COUNT repositories..."
     _context_write_file "$output"
+    # Persist any newly detected per-repo branches back to revo.yaml
+    config_save
     ui_spinner_stop
     ui_step_done "Scanned:" "$YAML_REPO_COUNT repositories"
     ui_step_done "Wrote:" "CLAUDE.md"

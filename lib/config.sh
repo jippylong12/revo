@@ -5,6 +5,12 @@
 REVO_WORKSPACE_ROOT=""
 REVO_CONFIG_FILE=""
 REVO_REPOS_DIR=""
+# When invoked from inside .revo/workspaces/<name>/, REVO_REPOS_DIR is
+# overridden to point at that workspace dir so existing commands (status,
+# commit, push, pr, exec, ...) operate on the workspace's copies of the
+# repos rather than the source tree under repos/. REVO_ACTIVE_WORKSPACE
+# holds the workspace name in that case (empty otherwise).
+REVO_ACTIVE_WORKSPACE=""
 
 # Find workspace root by searching upward for revo.yaml (or mars.yaml as fallback)
 # Usage: config_find_root [start_dir]
@@ -18,6 +24,7 @@ config_find_root() {
             REVO_WORKSPACE_ROOT="$current"
             REVO_CONFIG_FILE="$current/revo.yaml"
             REVO_REPOS_DIR="$current/repos"
+            _config_apply_workspace_override "$start_dir"
             return 0
         fi
         # Fallback: support mars.yaml for migration from Mars
@@ -25,12 +32,44 @@ config_find_root() {
             REVO_WORKSPACE_ROOT="$current"
             REVO_CONFIG_FILE="$current/mars.yaml"
             REVO_REPOS_DIR="$current/repos"
+            _config_apply_workspace_override "$start_dir"
             return 0
         fi
         current="$(dirname "$current")"
     done
 
     return 1
+}
+
+# If start_dir is inside .revo/workspaces/<name>/, point REVO_REPOS_DIR at
+# that workspace and remember the active workspace name. Otherwise leave
+# things alone. Called from config_find_root after the root has been set.
+_config_apply_workspace_override() {
+    local start_dir="$1"
+    REVO_ACTIVE_WORKSPACE=""
+
+    [[ -z "$REVO_WORKSPACE_ROOT" ]] && return 0
+
+    local prefix="$REVO_WORKSPACE_ROOT/.revo/workspaces/"
+    case "$start_dir/" in
+        "$prefix"*)
+            local rest="${start_dir#"$prefix"}"
+            local ws_name="${rest%%/*}"
+            if [[ -n "$ws_name" ]] && [[ -d "$prefix$ws_name" ]]; then
+                REVO_REPOS_DIR="$prefix$ws_name"
+                REVO_ACTIVE_WORKSPACE="$ws_name"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+# Always returns the source repos dir ($REVO_WORKSPACE_ROOT/repos),
+# regardless of any active workspace override. Used by `revo workspace`
+# itself, which must read from the source tree even when invoked from
+# inside another workspace.
+config_source_repos_dir() {
+    printf '%s/repos' "$REVO_WORKSPACE_ROOT"
 }
 
 # Initialize workspace in current directory
@@ -56,6 +95,7 @@ config_init() {
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
     YAML_REPO_DEPS=()
+    YAML_REPO_BRANCHES=()
 
     # Create directory structure
     mkdir -p "$REVO_REPOS_DIR"
@@ -197,7 +237,21 @@ config_workspace_name() {
     printf '%s' "$YAML_WORKSPACE_NAME"
 }
 
-# Get default branch
+# Get workspace default branch
 config_default_branch() {
     printf '%s' "$YAML_DEFAULTS_BRANCH"
+}
+
+# Get effective default branch for a specific repo
+# Falls back to workspace default if no per-repo branch is set
+# Usage: branch=$(config_repo_default_branch "repo_index")
+config_repo_default_branch() {
+    local idx="$1"
+    local branch
+    branch=$(yaml_get_branch "$idx")
+    if [[ -n "$branch" ]]; then
+        printf '%s' "$branch"
+    else
+        printf '%s' "$YAML_DEFAULTS_BRANCH"
+    fi
 }

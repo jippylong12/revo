@@ -77,8 +77,10 @@ cmd_detect() {
             ln -s "../$name" "repos/$name"
         fi
 
-        yaml_add_repo "$remote" "$name" "$tags" ""
-        ui_step_done "Found:" "$name ($remote)"
+        local branch
+        branch=$(git_default_branch "$d")
+        yaml_add_repo "$remote" "$name" "$tags" "" "$branch"
+        ui_step_done "Found:" "$name ($remote, branch: $branch)"
         found=$((found + 1))
     done
 
@@ -98,8 +100,10 @@ cmd_detect() {
             done
             [[ $already -eq 1 ]] && continue
             remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
-            yaml_add_repo "$remote" "$name" "$name" ""
-            ui_step_done "Found:" "$name ($remote)"
+            local branch
+            branch=$(git_default_branch "$d")
+            yaml_add_repo "$remote" "$name" "$name" "" "$branch"
+            ui_step_done "Found:" "$name ($remote, branch: $branch)"
             found=$((found + 1))
         done
     fi
