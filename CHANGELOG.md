@@ -1,5 +1,37 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- `revo detect` — bootstraps a workspace around git repos that already exist
+  in the current directory. Auto-tags by category (frontend/backend) based
+  on package contents and links root-level repos into `repos/` via relative
+  symlinks.
+- `revo init` now auto-detects existing git repos in the current directory
+  (and in `repos/`), adds them to `revo.yaml` with smart tag categorization,
+  links root-level repos into `repos/`, and runs `revo context` immediately.
+  When run in an empty directory it writes a Claude-first onboarding
+  `CLAUDE.md` so the agent can start helping right away.
+- `revo init` no longer requires a workspace name — pressing enter defaults
+  to the current directory's basename, so `init` can run non-interactively.
+- `revo context` now lists `.revo/features/*.md` briefs under an
+  `## Active Features` section in the generated `CLAUDE.md`.
+- `revo context` now appends a `## Workspace Tool: revo` section with a
+  setup, daily-workflow, tag filtering, and feature workflow reference so
+  Claude Code can rediscover the available commands without leaving the
+  file.
+- Extended framework detection in `lib/scan.sh`:
+  - Node.js: React Native, Expo, Angular (in addition to existing
+    Next/Nuxt/Remix/SvelteKit/Astro/Vite/NestJS/Fastify/Express/Hono/React/Vue/Svelte)
+  - Java/Kotlin (Gradle), Java (Maven), Ruby (with Rails/Sinatra
+    detection), Swift (Package.swift)
+
+### Changed
+- `revo clone` now always regenerates the workspace `CLAUDE.md` after a
+  successful clone batch (previously only on first clone, when `CLAUDE.md`
+  did not yet exist). The internal helper renamed from
+  `context_autogenerate_if_missing` to `context_regenerate_silent`.
+
 ## [0.2.0] - 2026-04-09
 
 Renamed the project from **Mars** to **Revo** and added Claude-first commands.

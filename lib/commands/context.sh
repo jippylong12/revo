@@ -202,7 +202,29 @@ _context_write_file() {
         printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
     fi
 
-    # Agent instructions
+    # Active features (any .revo/features/*.md files)
+    local features_dir="$REVO_WORKSPACE_ROOT/.revo/features"
+    if [[ -d "$features_dir" ]]; then
+        local has_features=0
+        local f
+        for f in "$features_dir"/*.md; do
+            [[ -f "$f" ]] || continue
+            if [[ $has_features -eq 0 ]]; then
+                {
+                    printf '\n'
+                    printf '## Active Features\n'
+                    printf '\n'
+                } >> "$output"
+                has_features=1
+            fi
+            local fname rel
+            fname=$(basename "$f" .md)
+            rel=".revo/features/$(basename "$f")"
+            printf -- '- **%s** — see [%s](%s)\n' "$fname" "$rel" "$rel" >> "$output"
+        done
+    fi
+
+    # Agent instructions + revo tool docs
     {
         printf '\n'
         printf '## Agent Instructions\n'
@@ -217,6 +239,49 @@ _context_write_file() {
         printf '6. Use `revo commit "msg"` to commit across all repos at once\n'
         printf '7. Use `revo feature <name>` to start a coordinated feature workspace\n'
         printf '8. Use `revo pr "title"` to open coordinated pull requests\n'
+        printf '\n'
+        printf '## Workspace Tool: revo\n'
+        printf '\n'
+        printf 'This workspace is managed by revo.\n'
+        printf 'Source: https://github.com/jippylong12/revo\n'
+        printf '\n'
+        printf '### Available commands (run in terminal)\n'
+        printf '\n'
+        printf '**Setup:**\n'
+        printf -- '- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo\n'
+        printf -- '- `revo clone` — clone all configured repos\n'
+        printf -- '- `revo context` — regenerate this file\n'
+        printf -- '- `revo detect` — bootstrap around existing repos in cwd\n'
+        printf '\n'
+        printf '**Daily workflow:**\n'
+        printf -- '- `revo status` — branch and dirty state across all repos\n'
+        printf -- '- `revo sync` — pull latest across all repos\n'
+        printf -- '- `revo feature <name> [--tag t]` — create feature branch across repos\n'
+        printf -- '- `revo commit "msg" [--tag t]` — commit all dirty repos\n'
+        printf -- '- `revo push [--tag t]` — push all repos\n'
+        printf -- '- `revo pr "title" [--tag t]` — create coordinated PRs via gh CLI\n'
+        printf -- '- `revo exec "cmd" [--tag t]` — run command in filtered repos\n'
+        printf -- '- `revo checkout <branch> [--tag t]` — switch branch across repos\n'
+        printf '\n'
+        printf '### Tag filtering\n'
+        printf '\n'
+        printf 'All commands support `--tag <tag>` to target specific repos:\n'
+        printf '\n'
+        printf '```\n'
+        printf 'revo exec "npm test" --tag frontend\n'
+        printf 'revo sync --tag backend\n'
+        printf 'revo branch hotfix --tag api\n'
+        printf '```\n'
+        printf '\n'
+        printf '### Feature workflow\n'
+        printf '\n'
+        printf '```\n'
+        printf 'revo feature my-feature          # branches all repos\n'
+        printf '# edit .revo/features/my-feature.md to describe scope\n'
+        printf '# work across repos\n'
+        printf 'revo commit "feat: my feature"   # commits all dirty repos\n'
+        printf 'revo pr "My feature"             # coordinated PRs\n'
+        printf '```\n'
     } >> "$output"
 }
 
@@ -264,14 +329,14 @@ cmd_context() {
     return 0
 }
 
-# Called automatically from cmd_clone if CLAUDE.md does not yet exist.
-context_autogenerate_if_missing() {
+# Called automatically from cmd_clone after a successful clone batch.
+# Always rewrites the workspace CLAUDE.md so newly cloned repos show up.
+context_regenerate_silent() {
     [[ -z "$REVO_WORKSPACE_ROOT" ]] && return 0
-    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
-    [[ -f "$output" ]] && return 0
     [[ $YAML_REPO_COUNT -eq 0 ]] && return 0
 
+    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
     _context_write_file "$output"
-    ui_info "$(ui_dim "Auto-generated CLAUDE.md for Claude Code")"
+    ui_info "$(ui_dim "Regenerated CLAUDE.md for Claude Code")"
     return 0
 }

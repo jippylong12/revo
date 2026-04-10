@@ -8,8 +8,13 @@ Revo is a fork of [Mars](https://github.com/dean0x/mars). It keeps everything
 Mars gives you — tag-based filtering, coordinated branches, zero dependencies —
 and adds features designed for working with coding agents:
 
+- **`revo init`** auto-detects existing git repos in the current directory and
+  bootstraps a workspace around them, no manual `revo add` required.
+- **`revo detect`** does the same on demand for an already-populated folder
+  full of clones.
 - **`revo context`** scans your repos and writes a root-level `CLAUDE.md` so
-  Claude Code can understand the whole workspace at a glance.
+  Claude Code can understand the whole workspace at a glance — including
+  active feature briefs and a built-in revo command reference.
 - **`revo feature <name>`** creates a coordinated branch and shared context
   file across matching repos.
 - **`revo commit`**, **`revo push`**, **`revo pr`** let you commit, push, and
@@ -22,6 +27,8 @@ Pure bash 3.2+, works on macOS out of the box, no runtime dependencies beyond
 
 ## Quick Start
 
+### From an empty directory
+
 ```bash
 mkdir my-project && cd my-project
 revo init
@@ -30,9 +37,22 @@ revo add git@github.com:org/shared-types.git --tags shared
 revo add git@github.com:org/backend.git --tags backend,api --depends-on shared-types
 revo add git@github.com:org/frontend.git --tags frontend,web --depends-on backend
 
-revo clone            # CLAUDE.md is auto-generated after first clone
+revo clone            # CLAUDE.md is regenerated after each clone batch
 revo context          # regenerate it any time repos change
 ```
+
+### From a folder you already populated with clones
+
+```bash
+cd ~/code/my-project   # already has frontend/, backend/, shared/ as git repos
+revo init              # auto-detects existing repos, links them, writes CLAUDE.md
+# — or —
+revo detect            # same idea, runs on its own without prompting
+```
+
+`init` and `detect` both link root-level repos into `repos/` via relative
+symlinks so the rest of revo's data model keeps working without moving any
+files around.
 
 Then point Claude Code at the workspace directory and it will read `CLAUDE.md`
 on its own.
@@ -61,13 +81,14 @@ revo pr "Clock endpoint for students"    ── coordinated PRs via gh
 
 ## Commands
 
-### Workspace (from Mars)
+### Workspace
 
 | Command | Description |
 |---------|-------------|
-| `revo init` | Initialize a new workspace |
+| `revo init` | Initialize a new workspace; auto-detects existing git repos in cwd |
+| `revo detect` | Bootstrap revo around git repos already present in cwd |
 | `revo add <url> [--tags t1,t2] [--depends-on r1,r2]` | Add a repository to config |
-| `revo clone [--tag TAG]` | Clone configured repositories |
+| `revo clone [--tag TAG]` | Clone configured repositories (regenerates `CLAUDE.md` after) |
 | `revo list [--tag TAG]` | List configured repositories |
 | `revo status [--tag TAG]` | Show status of all repositories |
 | `revo sync [--tag TAG] [--rebase]` | Pull latest changes |
@@ -84,6 +105,21 @@ revo pr "Clock endpoint for students"    ── coordinated PRs via gh
 | `revo commit <msg> [--tag TAG]` | Commit across dirty repos |
 | `revo push [--tag TAG]` | Push branches across repos |
 | `revo pr <title> [--tag TAG] [--body BODY]` | Create coordinated PRs via `gh` |
+
+### What `revo context` detects per repo
+
+- **Node.js** — Next.js, Nuxt, Remix, SvelteKit, Astro, Vite, NestJS, Fastify,
+  Express, Hono, Angular, React, Vue, Svelte, React Native, Expo
+- **Python** — Django, FastAPI, Flask, Starlette
+- **Go** (module name), **Rust** (Cargo), **Java/Kotlin** (Gradle), **Java**
+  (Maven), **Ruby** (Rails, Sinatra), **Swift** (Package.swift)
+- API route directories (`src/routes/`, `src/api/`, `app/api/`, `routes/`,
+  `pages/api/`, etc.)
+- Whether the repo ships its own `CLAUDE.md`, `Dockerfile`, or
+  `docker-compose.yml`
+- The first non-trivial line of `README.md` as a one-line description
+- Any `.revo/features/*.md` briefs at the workspace root, listed as
+  `## Active Features`
 
 ## Tag Filtering
 

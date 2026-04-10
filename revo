@@ -22,6 +22,7 @@ if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
     source "$REVO_SCRIPT_DIR/lib/git.sh"
     source "$REVO_SCRIPT_DIR/lib/scan.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/init.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/detect.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/clone.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/status.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/branch.sh"
@@ -46,7 +47,8 @@ Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
 Usage: revo <command> [options]
 
 Workspace commands:
-  init                        Initialize a new workspace
+  init                        Initialize a new workspace (auto-detects existing repos)
+  detect                      Bootstrap revo around existing git repos in cwd
   add URL [--tags TAGS]       Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
   list [--tag TAG]            List configured repositories
@@ -108,6 +110,9 @@ main() {
     case "$command" in
         init)
             cmd_init "$@"
+            ;;
+        detect)
+            cmd_detect "$@"
             ;;
         clone)
             cmd_clone "$@"

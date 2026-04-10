@@ -60,6 +60,10 @@ _scan_node_framework() {
         printf 'SvelteKit'
     elif _scan_pkg_has_dep "$file" "astro"; then
         printf 'Astro'
+    elif _scan_pkg_has_dep "$file" "expo"; then
+        printf 'Expo (React Native)'
+    elif _scan_pkg_has_dep "$file" "react-native"; then
+        printf 'React Native'
     elif _scan_pkg_has_dep "$file" "vite"; then
         printf 'Vite'
     elif _scan_pkg_has_dep "$file" "nestjs" || _scan_pkg_has_dep "$file" "@nestjs/core"; then
@@ -70,12 +74,24 @@ _scan_node_framework() {
         printf 'Express'
     elif _scan_pkg_has_dep "$file" "hono"; then
         printf 'Hono'
+    elif _scan_pkg_has_dep "$file" "@angular/core"; then
+        printf 'Angular'
     elif _scan_pkg_has_dep "$file" "react"; then
         printf 'React'
     elif _scan_pkg_has_dep "$file" "vue"; then
         printf 'Vue'
     elif _scan_pkg_has_dep "$file" "svelte"; then
         printf 'Svelte'
+    fi
+}
+
+# Detect framework from a Gemfile
+_scan_ruby_framework() {
+    local file="$1"
+    if grep -q "rails" "$file" 2>/dev/null; then
+        printf 'Rails'
+    elif grep -q "sinatra" "$file" 2>/dev/null; then
+        printf 'Sinatra'
     fi
 }
 
@@ -213,6 +229,27 @@ scan_repo() {
     if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Cargo.toml" ]]; then
         SCAN_LANG="Rust"
         SCAN_NAME=$(grep -m1 -E '^[[:space:]]*name[[:space:]]*=' "$repo_dir/Cargo.toml" 2>/dev/null | sed -E 's/.*=[[:space:]]*"([^"]*)".*/\1/' || true)
+    fi
+
+    # Java/Kotlin (Gradle)
+    if [[ -z "$SCAN_LANG" ]] && { [[ -f "$repo_dir/build.gradle" ]] || [[ -f "$repo_dir/build.gradle.kts" ]]; }; then
+        SCAN_LANG="Java/Kotlin (Gradle)"
+    fi
+
+    # Java (Maven)
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/pom.xml" ]]; then
+        SCAN_LANG="Java (Maven)"
+    fi
+
+    # Ruby
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Gemfile" ]]; then
+        SCAN_LANG="Ruby"
+        SCAN_FRAMEWORK=$(_scan_ruby_framework "$repo_dir/Gemfile")
+    fi
+
+    # Swift
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Package.swift" ]]; then
+        SCAN_LANG="Swift"
     fi
 
     # Routes

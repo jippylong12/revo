@@ -22,7 +22,8 @@ revo/
 │   ├── git.sh             # Git wrapper with output capture
 │   ├── scan.sh            # Framework/language detection (for revo context)
 │   └── commands/          # Command implementations
-│       ├── init.sh        # Mars-inherited commands
+│       ├── init.sh        # Mars-inherited commands (init now auto-detects existing repos)
+│       ├── detect.sh      # Bootstrap revo around a folder of existing clones
 │       ├── clone.sh
 │       ├── status.sh
 │       ├── branch.sh
@@ -54,9 +55,12 @@ revo/
 Revo is a fork of [Mars](https://github.com/dean0x/mars). The workspace
 primitives (init/add/clone/status/sync/branch/checkout/exec/list) are Mars's;
 Revo adds the Claude-first commands (`context`, `feature`, `commit`, `push`,
-`pr`) and the `depends_on` field in `revo.yaml`. Upstream Mars bug fixes can
-usually be cherry-picked in from `lib/ui.sh`, `lib/yaml.sh`, `lib/config.sh`,
-`lib/git.sh`, and the Mars-inherited commands.
+`pr`, `detect`) and the `depends_on` field in `revo.yaml`. Note that
+`init.sh` and `clone.sh` have diverged from Mars: `cmd_init` now auto-detects
+existing git repos and writes a Claude-first `CLAUDE.md`, and `cmd_clone`
+always regenerates the workspace context after a clone batch. Upstream Mars
+bug fixes for `lib/ui.sh`, `lib/yaml.sh`, `lib/config.sh`, `lib/git.sh`, and
+the unmodified commands can still be cherry-picked.
 
 ### Key Patterns
 

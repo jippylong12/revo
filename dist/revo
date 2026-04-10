@@ -1232,6 +1232,10 @@ _scan_node_framework() {
         printf 'SvelteKit'
     elif _scan_pkg_has_dep "$file" "astro"; then
         printf 'Astro'
+    elif _scan_pkg_has_dep "$file" "expo"; then
+        printf 'Expo (React Native)'
+    elif _scan_pkg_has_dep "$file" "react-native"; then
+        printf 'React Native'
     elif _scan_pkg_has_dep "$file" "vite"; then
         printf 'Vite'
     elif _scan_pkg_has_dep "$file" "nestjs" || _scan_pkg_has_dep "$file" "@nestjs/core"; then
@@ -1242,12 +1246,24 @@ _scan_node_framework() {
         printf 'Express'
     elif _scan_pkg_has_dep "$file" "hono"; then
         printf 'Hono'
+    elif _scan_pkg_has_dep "$file" "@angular/core"; then
+        printf 'Angular'
     elif _scan_pkg_has_dep "$file" "react"; then
         printf 'React'
     elif _scan_pkg_has_dep "$file" "vue"; then
         printf 'Vue'
     elif _scan_pkg_has_dep "$file" "svelte"; then
         printf 'Svelte'
+    fi
+}
+
+# Detect framework from a Gemfile
+_scan_ruby_framework() {
+    local file="$1"
+    if grep -q "rails" "$file" 2>/dev/null; then
+        printf 'Rails'
+    elif grep -q "sinatra" "$file" 2>/dev/null; then
+        printf 'Sinatra'
     fi
 }
 
@@ -1387,6 +1403,27 @@ scan_repo() {
         SCAN_NAME=$(grep -m1 -E '^[[:space:]]*name[[:space:]]*=' "$repo_dir/Cargo.toml" 2>/dev/null | sed -E 's/.*=[[:space:]]*"([^"]*)".*/\1/' || true)
     fi
 
+    # Java/Kotlin (Gradle)
+    if [[ -z "$SCAN_LANG" ]] && { [[ -f "$repo_dir/build.gradle" ]] || [[ -f "$repo_dir/build.gradle.kts" ]]; }; then
+        SCAN_LANG="Java/Kotlin (Gradle)"
+    fi
+
+    # Java (Maven)
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/pom.xml" ]]; then
+        SCAN_LANG="Java (Maven)"
+    fi
+
+    # Ruby
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Gemfile" ]]; then
+        SCAN_LANG="Ruby"
+        SCAN_FRAMEWORK=$(_scan_ruby_framework "$repo_dir/Gemfile")
+    fi
+
+    # Swift
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Package.swift" ]]; then
+        SCAN_LANG="Swift"
+    fi
+
     # Routes
     SCAN_ROUTES=$(_scan_list_routes "$repo_dir")
 
@@ -1412,12 +1449,181 @@ scan_repo() {
 
 # === lib/commands/init.sh ===
 # Revo CLI - init command
-# Interactive workspace initialization
+# Initializes a workspace and auto-detects existing git repos in the current
+# directory (and in repos/), so that running `revo init` in a folder you
+# already populated with clones bootstraps a usable workspace immediately.
+
+# Suggest tags for an auto-detected repo based on its package contents.
+# Always returns the repo name as a tag, plus an optional category tag
+# (frontend/backend) when one can be inferred. Skips the category when it
+# would be a duplicate of the name.
+_init_auto_tags() {
+    local dir="$1"
+    local name="$2"
+    local category=""
+
+    if [[ -f "$dir/package.json" ]]; then
+        if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$dir/package.json" 2>/dev/null; then
+            category="frontend"
+        elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$dir/package.json" 2>/dev/null; then
+            category="backend"
+        fi
+    elif [[ -f "$dir/go.mod" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/pom.xml" ]] || [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
+        category="backend"
+    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]]; then
+        category="backend"
+    fi
+
+    if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
+        printf '%s, %s' "$name" "$category"
+    else
+        printf '%s' "$name"
+    fi
+}
+
+# Scan for git repos in the current directory and in repos/.
+# Sets _INIT_FOUND_DIRS to a newline-separated list of repo paths.
+_INIT_FOUND_DIRS=""
+_init_scan_existing() {
+    _INIT_FOUND_DIRS=""
+
+    local d
+    for d in */; do
+        d="${d%/}"
+        [[ "$d" == "repos" ]] && continue
+        [[ "$d" == ".revo" ]] && continue
+        if [[ -d "$d/.git" ]]; then
+            if [[ -z "$_INIT_FOUND_DIRS" ]]; then
+                _INIT_FOUND_DIRS="$d"
+            else
+                _INIT_FOUND_DIRS="$_INIT_FOUND_DIRS"$'\n'"$d"
+            fi
+        fi
+    done
+
+    if [[ -d "repos" ]]; then
+        for d in repos/*/; do
+            d="${d%/}"
+            if [[ -d "$d/.git" ]]; then
+                if [[ -z "$_INIT_FOUND_DIRS" ]]; then
+                    _INIT_FOUND_DIRS="$d"
+                else
+                    _INIT_FOUND_DIRS="$_INIT_FOUND_DIRS"$'\n'"$d"
+                fi
+            fi
+        done
+    fi
+}
+
+# Write a Claude-first onboarding CLAUDE.md, or append a revo section if the
+# user already has their own CLAUDE.md in the workspace root.
+_init_write_claude_md() {
+    local out="$REVO_WORKSPACE_ROOT/CLAUDE.md"
+
+    if [[ -f "$out" ]] && ! grep -q "managed by revo" "$out" 2>/dev/null; then
+        if grep -q "Workspace Tool: revo" "$out" 2>/dev/null; then
+            return 0
+        fi
+        cat >> "$out" << 'EOF'
+
+---
+
+## Workspace Tool: revo
+
+This workspace uses revo to manage multiple repos.
+Source: https://github.com/jippylong12/revo
+
+### Setup commands
+- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo to workspace
+- `revo clone` — clone all configured repos
+- `revo context` — scan repos and regenerate the workspace context section
+
+### Daily commands
+- `revo status` — branch and dirty state across all repos
+- `revo sync` — pull latest across all repos
+- `revo feature <name>` — create feature branch across all repos
+- `revo commit "msg"` — commit all dirty repos with same message
+- `revo push` — push all repos
+- `revo pr "title"` — create coordinated PRs via gh CLI
+- `revo exec "cmd" --tag <tag>` — run command in filtered repos
+
+### Working in this workspace
+- Repos live in the repos/ subdirectory (or wherever configured in revo.yaml)
+- Edit files across repos directly
+- Check .revo/features/ for active feature briefs
+- Follow dependency order when making cross-repo changes
+EOF
+        ui_step_done "Appended revo section to existing CLAUDE.md"
+        return 0
+    fi
+
+    cat > "$out" << 'EOF'
+# Workspace managed by revo
+
+This is a multi-repo workspace managed by revo.
+revo is installed and available in the terminal.
+
+## Quick reference
+
+### If repos are not yet added
+The user may give you repo URLs or descriptions. Use these commands to set up:
+
+```bash
+revo add <git-url> --tags <tag1,tag2> [--depends-on <repo-name>]
+revo clone
+revo context    # regenerates this file with full repo details
+```
+
+Example:
+```bash
+revo add git@github.com:org/shared.git --tags shared,types
+revo add git@github.com:org/backend.git --tags backend,api --depends-on shared
+revo add git@github.com:org/frontend.git --tags frontend,web --depends-on backend
+revo clone
+```
+
+### If repos are already set up
+Use `revo status` to see all repos, branches, and dirty state.
+
+## Available commands
+- `revo status` — branch and dirty state across all repos
+- `revo sync` — pull latest across all repos
+- `revo feature <name>` — create feature branch across all repos
+- `revo commit "msg"` — commit all dirty repos with same message
+- `revo push` — push all repos
+- `revo pr "title"` — create coordinated PRs via gh CLI
+- `revo exec "cmd" --tag <tag>` — run command in filtered repos
+- `revo context` — regenerate this file after repos change
+- `revo add <url> --tags <t> --depends-on <d>` — add a repo
+
+### Tag filtering
+All commands support `--tag <tag>` to target specific repos:
+
+```bash
+revo exec "npm test" --tag frontend
+revo sync --tag backend
+revo branch hotfix --tag api
+```
+
+## Working in this workspace
+- Repos are in the repos/ subdirectory (or as configured in revo.yaml)
+- Edit files across repos/ directly — you have full access
+- When making cross-repo changes, follow the dependency order below
+- Check .revo/features/ for active feature briefs
+- Use revo commands instead of manually running git in each repo
+
+## Dependency order
+<!-- revo context will fill this in once repos are cloned -->
+Run `revo context` after cloning to populate repo details and dependency order.
+EOF
+
+    ui_step_done "Created CLAUDE.md (Claude reads this automatically)"
+}
 
 cmd_init() {
     local workspace_name=""
 
-    # Check if already initialized
+    # Already initialized? Bail out.
     if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
         ui_step_error "Workspace already initialized in this directory"
         return 1
@@ -1425,20 +1631,21 @@ cmd_init() {
 
     ui_intro "Revo - Claude-first Multi-Repo Workspace"
 
-    # Get workspace name
+    # Default workspace name to current directory basename so init can run
+    # non-interactively. The user can still override by typing a value.
+    local default_name
+    default_name=$(basename "$PWD")
     ui_step "Workspace name?"
     printf '%s  ' "$(ui_bar)"
     read -r workspace_name
-
     if [[ -z "$workspace_name" ]]; then
-        ui_outro_cancel "Cancelled - workspace name is required"
-        return 1
+        workspace_name="$default_name"
     fi
 
     ui_step_done "Workspace:" "$workspace_name"
     ui_bar_line
 
-    # Initialize workspace
+    # Initialize the on-disk config.
     if ! config_init "$workspace_name"; then
         ui_step_error "Failed to initialize workspace"
         return 1
@@ -1448,8 +1655,177 @@ cmd_init() {
     ui_step_done "Created .gitignore"
     ui_step_done "Created repos/ directory"
 
-    ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
+    # Auto-detect existing git repos in the current directory.
+    _init_scan_existing
+    local detected_count=0
+    if [[ -n "$_INIT_FOUND_DIRS" ]]; then
+        local dir name remote tags path
+        while IFS= read -r dir; do
+            [[ -z "$dir" ]] && continue
+            name=$(basename "$dir")
+            remote=$(cd "$dir" && git remote get-url origin 2>/dev/null || true)
+            if [[ -z "$remote" ]]; then
+                ui_step_error "Skipping $name (no git remote)"
+                continue
+            fi
 
+            path="$name"
+
+            # If the repo lives at the workspace root (not under repos/),
+            # link it into repos/ so the rest of revo's data model — which
+            # always resolves $REVO_REPOS_DIR/$path — works without copying
+            # or moving files.
+            if [[ "$dir" != repos/* ]]; then
+                if [[ ! -e "repos/$name" ]]; then
+                    ln -s "../$name" "repos/$name"
+                fi
+            fi
+
+            tags=$(_init_auto_tags "$dir" "$name")
+            yaml_add_repo "$remote" "$path" "$tags" ""
+            ui_step_done "Detected:" "$name → $remote"
+            detected_count=$((detected_count + 1))
+        done <<< "$_INIT_FOUND_DIRS"
+
+        if [[ $detected_count -gt 0 ]]; then
+            config_save
+            ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
+        fi
+    fi
+
+    # Write the Claude-first onboarding CLAUDE.md (or append to user's own).
+    _init_write_claude_md
+
+    # If we detected repos, immediately generate the full workspace context.
+    if [[ $detected_count -gt 0 ]]; then
+        ui_bar_line
+        cmd_context
+        return 0
+    fi
+
+    ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
+    return 0
+}
+
+# === lib/commands/detect.sh ===
+# Revo CLI - detect command
+# Bootstraps a workspace around git repos that already exist in the current
+# directory. Use this when you have a parent folder full of clones and want
+# revo to wrap them without re-cloning.
+
+cmd_detect() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                printf 'Usage: revo detect\n\n'
+                printf 'Auto-detect git repositories in the current directory and\n'
+                printf 'bootstrap a revo workspace around them. Generates revo.yaml\n'
+                printf 'and CLAUDE.md from what it finds.\n'
+                return 0
+                ;;
+            *)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
+        ui_step_error "Workspace already initialized — run 'revo context' to regenerate CLAUDE.md"
+        return 1
+    fi
+
+    ui_intro "Revo - Detect Existing Repositories"
+    ui_step "Scanning for git repos..."
+
+    # Initialize the workspace using the cwd basename. This sets
+    # REVO_WORKSPACE_ROOT/REVO_CONFIG_FILE/REVO_REPOS_DIR and writes an empty
+    # revo.yaml + .gitignore.
+    local default_name
+    default_name=$(basename "$PWD")
+    if ! config_init "$default_name"; then
+        ui_step_error "Failed to initialize workspace"
+        return 1
+    fi
+
+    local found=0
+    local d name remote category tags
+
+    for d in */; do
+        d="${d%/}"
+        [[ "$d" == "repos" ]] && continue
+        [[ "$d" == ".revo" ]] && continue
+        [[ -d "$d/.git" ]] || continue
+
+        name="$d"
+        remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
+
+        # Auto-categorize from package contents.
+        category=""
+        if [[ -f "$d/package.json" ]]; then
+            if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$d/package.json" 2>/dev/null; then
+                category="frontend"
+            elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$d/package.json" 2>/dev/null; then
+                category="backend"
+            fi
+        elif [[ -f "$d/go.mod" ]] || [[ -f "$d/Cargo.toml" ]] || [[ -f "$d/pom.xml" ]] || [[ -f "$d/build.gradle" ]] || [[ -f "$d/build.gradle.kts" ]]; then
+            category="backend"
+        elif [[ -f "$d/pyproject.toml" ]] || [[ -f "$d/requirements.txt" ]]; then
+            category="backend"
+        fi
+
+        if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
+            tags="$name, $category"
+        else
+            tags="$name"
+        fi
+
+        # Link the root-level repo into repos/ so the rest of revo's data
+        # model (which always resolves $REVO_REPOS_DIR/$path) works.
+        if [[ ! -e "repos/$name" ]]; then
+            ln -s "../$name" "repos/$name"
+        fi
+
+        yaml_add_repo "$remote" "$name" "$tags" ""
+        ui_step_done "Found:" "$name ($remote)"
+        found=$((found + 1))
+    done
+
+    if [[ -d "repos" ]]; then
+        for d in repos/*/; do
+            d="${d%/}"
+            [[ -d "$d/.git" ]] || continue
+            name=$(basename "$d")
+            # Skip repos already added via symlink in the loop above.
+            local already=0
+            local i
+            for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+                if [[ "$(yaml_get_path "$i")" == "$name" ]]; then
+                    already=1
+                    break
+                fi
+            done
+            [[ $already -eq 1 ]] && continue
+            remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
+            yaml_add_repo "$remote" "$name" "$name" ""
+            ui_step_done "Found:" "$name ($remote)"
+            found=$((found + 1))
+        done
+    fi
+
+    if [[ $found -eq 0 ]]; then
+        rm -f "$REVO_CONFIG_FILE"
+        ui_step_error "No git repos found in current directory. Use 'revo init' instead."
+        ui_outro_cancel "Nothing to detect"
+        return 1
+    fi
+
+    config_save
+    ui_step_done "Detected $found repository(ies)"
+    ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
+    ui_bar_line
+
+    cmd_context
     return 0
 }
 
@@ -1548,9 +1924,10 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
-    # Auto-generate workspace CLAUDE.md on first successful clone
-    if [[ $fail_count -eq 0 ]] && [[ $success_count -gt 0 ]]; then
-        context_autogenerate_if_missing
+    # Always regenerate the workspace CLAUDE.md after a clone batch so that
+    # newly cloned repos appear in the context immediately.
+    if [[ $fail_count -eq 0 ]] && { [[ $success_count -gt 0 ]] || [[ $skip_count -gt 0 ]]; }; then
+        context_regenerate_silent
     fi
 
     # Summary
@@ -2489,7 +2866,29 @@ _context_write_file() {
         printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
     fi
 
-    # Agent instructions
+    # Active features (any .revo/features/*.md files)
+    local features_dir="$REVO_WORKSPACE_ROOT/.revo/features"
+    if [[ -d "$features_dir" ]]; then
+        local has_features=0
+        local f
+        for f in "$features_dir"/*.md; do
+            [[ -f "$f" ]] || continue
+            if [[ $has_features -eq 0 ]]; then
+                {
+                    printf '\n'
+                    printf '## Active Features\n'
+                    printf '\n'
+                } >> "$output"
+                has_features=1
+            fi
+            local fname rel
+            fname=$(basename "$f" .md)
+            rel=".revo/features/$(basename "$f")"
+            printf -- '- **%s** — see [%s](%s)\n' "$fname" "$rel" "$rel" >> "$output"
+        done
+    fi
+
+    # Agent instructions + revo tool docs
     {
         printf '\n'
         printf '## Agent Instructions\n'
@@ -2504,6 +2903,49 @@ _context_write_file() {
         printf '6. Use `revo commit "msg"` to commit across all repos at once\n'
         printf '7. Use `revo feature <name>` to start a coordinated feature workspace\n'
         printf '8. Use `revo pr "title"` to open coordinated pull requests\n'
+        printf '\n'
+        printf '## Workspace Tool: revo\n'
+        printf '\n'
+        printf 'This workspace is managed by revo.\n'
+        printf 'Source: https://github.com/jippylong12/revo\n'
+        printf '\n'
+        printf '### Available commands (run in terminal)\n'
+        printf '\n'
+        printf '**Setup:**\n'
+        printf -- '- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo\n'
+        printf -- '- `revo clone` — clone all configured repos\n'
+        printf -- '- `revo context` — regenerate this file\n'
+        printf -- '- `revo detect` — bootstrap around existing repos in cwd\n'
+        printf '\n'
+        printf '**Daily workflow:**\n'
+        printf -- '- `revo status` — branch and dirty state across all repos\n'
+        printf -- '- `revo sync` — pull latest across all repos\n'
+        printf -- '- `revo feature <name> [--tag t]` — create feature branch across repos\n'
+        printf -- '- `revo commit "msg" [--tag t]` — commit all dirty repos\n'
+        printf -- '- `revo push [--tag t]` — push all repos\n'
+        printf -- '- `revo pr "title" [--tag t]` — create coordinated PRs via gh CLI\n'
+        printf -- '- `revo exec "cmd" [--tag t]` — run command in filtered repos\n'
+        printf -- '- `revo checkout <branch> [--tag t]` — switch branch across repos\n'
+        printf '\n'
+        printf '### Tag filtering\n'
+        printf '\n'
+        printf 'All commands support `--tag <tag>` to target specific repos:\n'
+        printf '\n'
+        printf '```\n'
+        printf 'revo exec "npm test" --tag frontend\n'
+        printf 'revo sync --tag backend\n'
+        printf 'revo branch hotfix --tag api\n'
+        printf '```\n'
+        printf '\n'
+        printf '### Feature workflow\n'
+        printf '\n'
+        printf '```\n'
+        printf 'revo feature my-feature          # branches all repos\n'
+        printf '# edit .revo/features/my-feature.md to describe scope\n'
+        printf '# work across repos\n'
+        printf 'revo commit "feat: my feature"   # commits all dirty repos\n'
+        printf 'revo pr "My feature"             # coordinated PRs\n'
+        printf '```\n'
     } >> "$output"
 }
 
@@ -2551,15 +2993,15 @@ cmd_context() {
     return 0
 }
 
-# Called automatically from cmd_clone if CLAUDE.md does not yet exist.
-context_autogenerate_if_missing() {
+# Called automatically from cmd_clone after a successful clone batch.
+# Always rewrites the workspace CLAUDE.md so newly cloned repos show up.
+context_regenerate_silent() {
     [[ -z "$REVO_WORKSPACE_ROOT" ]] && return 0
-    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
-    [[ -f "$output" ]] && return 0
     [[ $YAML_REPO_COUNT -eq 0 ]] && return 0
 
+    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
     _context_write_file "$output"
-    ui_info "$(ui_dim "Auto-generated CLAUDE.md for Claude Code")"
+    ui_info "$(ui_dim "Regenerated CLAUDE.md for Claude Code")"
     return 0
 }
 
@@ -3144,7 +3586,8 @@ Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
 Usage: revo <command> [options]
 
 Workspace commands:
-  init                        Initialize a new workspace
+  init                        Initialize a new workspace (auto-detects existing repos)
+  detect                      Bootstrap revo around existing git repos in cwd
   add URL [--tags TAGS]       Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
   list [--tag TAG]            List configured repositories
@@ -3206,6 +3649,9 @@ main() {
     case "$command" in
         init)
             cmd_init "$@"
+            ;;
+        detect)
+            cmd_detect "$@"
             ;;
         clone)
             cmd_clone "$@"

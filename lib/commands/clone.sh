@@ -93,9 +93,10 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
-    # Auto-generate workspace CLAUDE.md on first successful clone
-    if [[ $fail_count -eq 0 ]] && [[ $success_count -gt 0 ]]; then
-        context_autogenerate_if_missing
+    # Always regenerate the workspace CLAUDE.md after a clone batch so that
+    # newly cloned repos appear in the context immediately.
+    if [[ $fail_count -eq 0 ]] && { [[ $success_count -gt 0 ]] || [[ $skip_count -gt 0 ]]; }; then
+        context_regenerate_silent
     fi
 
     # Summary

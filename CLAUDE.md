@@ -17,13 +17,26 @@ Mars provides the workspace layer: `init`, `add`, `clone`, `status`, `sync`,
 
 - **`revo context`** — scans cloned repos and generates a root-level `CLAUDE.md`
   that gives Claude Code a full picture of the workspace (frameworks, routes,
-  dependency order).
+  dependency order, active feature briefs, and a built-in revo command
+  reference).
+- **`revo detect`** — bootstraps a workspace around git repos that already
+  exist in the current directory (the "I have a folder full of clones" case).
 - **`revo feature <name>`** — creates a coordinated `feature/<name>` branch
   across repos and writes `.revo/features/<name>.md` as shared context.
 - **`revo commit`**, **`revo push`**, **`revo pr`** — coordinated commit,
   push, and GitHub PR creation across matching repos.
 - **`depends_on`** field in `revo.yaml` — drives the dependency order in the
   generated CLAUDE.md.
+
+Revo also diverges from Mars on two existing commands:
+
+- **`revo init`** auto-detects existing git repos in the current directory
+  (and in `repos/`), adds them to `revo.yaml` with smart tag categorization,
+  links root-level repos into `repos/` via relative symlinks, and runs
+  `revo context` immediately. The workspace name prompt now defaults to the
+  cwd basename so init can run non-interactively.
+- **`revo clone`** always regenerates the workspace `CLAUDE.md` after a
+  successful clone batch (not just on first clone).
 
 `revo.yaml` is the primary config file. `mars.yaml` is still honored as a
 fallback for migration.
@@ -69,9 +82,10 @@ lib/
 ├── git.sh          # Git wrapper with output capture
 ├── scan.sh         # Per-repo framework/language/route detection (for revo context)
 └── commands/
-    ├── init.sh       # workspace commands (from Mars)
+    ├── init.sh       # workspace commands (init auto-detects existing repos)
+    ├── detect.sh     # bootstrap revo around an existing folder of clones
     ├── add.sh
-    ├── clone.sh
+    ├── clone.sh      # always regenerates CLAUDE.md after a clone batch
     ├── list.sh
     ├── status.sh
     ├── sync.sh

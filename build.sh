@@ -39,6 +39,7 @@ SOURCE_FILES=(
     "lib/git.sh"
     "lib/scan.sh"
     "lib/commands/init.sh"
+    "lib/commands/detect.sh"
     "lib/commands/clone.sh"
     "lib/commands/status.sh"
     "lib/commands/branch.sh"
