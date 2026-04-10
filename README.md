@@ -72,7 +72,7 @@ Or via CLI: `revo add <url> --database postgres:myapp_dev`
 
 ### Context generation
 
-`revo context` scans every repo and writes a `CLAUDE.md` that tells Claude:
+`revo init` (on an existing workspace) scans every repo and writes a `CLAUDE.md` that tells Claude:
 - Per-repo: language, framework, API routes, package name, Docker status
 - Dependency order (topological sort from `depends_on`)
 - Active workspaces with paths and database names
@@ -99,13 +99,12 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 
 | Command | Description |
 |---------|-------------|
-| `revo init` | Initialize workspace, auto-detect existing repos, generate CLAUDE.md |
+| `revo init` | Initialize workspace or regenerate CLAUDE.md (idempotent) |
 | `revo add <url> [options]` | Add a repo (`--tags`, `--depends-on`, `--database type:name`) |
 | `revo clone [--tag TAG]` | Clone configured repos |
-| `revo context` | Regenerate workspace CLAUDE.md |
 | `revo feature <name>` | Create feature branch + context file across repos |
-| `revo workspace <name>` | Create isolated workspace copy with DB cloning |
-| `revo workspaces` | List active workspaces |
+| `revo workspace <name>` | Create isolated workspace with DB cloning |
+| `revo workspace list` | List active workspaces |
 | `revo commit <msg>` | Commit across dirty repos |
 | `revo push` | Push branches across repos |
 | `revo pr <title>` | Create coordinated PRs via `gh` |
@@ -116,7 +115,6 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo checkout <branch>` | Checkout branch across repos |
 | `revo exec "<cmd>"` | Run command in each repo |
 | `revo list` | List configured repos |
-| `revo detect` | *(alias for init on existing repos)* |
 
 All commands accept `--tag TAG` to target a subset of repos.
 
