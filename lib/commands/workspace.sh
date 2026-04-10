@@ -51,6 +51,9 @@ _workspace_verify_gitignore_safe() {
 # (`cp -RLl`), falls back to a regular recursive copy. Always follows
 # symlinks so init-style symlinked repos are materialized as real
 # directories inside the workspace.
+#
+# Real copy for all files (true isolation), then hardlink only heavy
+# immutable directories (node_modules, .venv, vendor, etc.) to save disk.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -61,18 +64,26 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    # Try hardlinks first. -R recursive, -L follow symlinks, -l hardlink.
-    if cp -RLl "$src" "$dest" 2>/dev/null; then
-        return 0
+    # Real copy — every file is independent (true workspace isolation)
+    if ! cp -RL "$src" "$dest" 2>/dev/null; then
+        return 1
     fi
 
-    # Fall back to a real copy
-    rm -rf "$dest" 2>/dev/null
-    if cp -RL "$src" "$dest" 2>/dev/null; then
-        return 0
-    fi
+    # Replace heavy immutable directories with hardlinked copies to save disk.
+    # These directories are never edited directly — they're rebuilt by package
+    # managers, so hardlinks are safe here.
+    local hardlink_dirs="node_modules .venv venv vendor .gradle build/node_modules"
+    local dir_name
+    for dir_name in $hardlink_dirs; do
+        local src_dir="$src/$dir_name"
+        local dest_dir="$dest/$dir_name"
+        if [[ -d "$src_dir" ]] && [[ -d "$dest_dir" ]]; then
+            rm -rf "$dest_dir"
+            cp -RLl "$src_dir" "$dest_dir" 2>/dev/null || true
+        fi
+    done
 
-    return 1
+    return 0
 }
 
 # Print mtime in seconds-since-epoch for a path. Handles BSD (macOS) and

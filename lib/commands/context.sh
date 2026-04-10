@@ -307,8 +307,21 @@ _context_write_file() {
             fi
             local ws_name
             ws_name=$(basename "$ws")
-            printf -- '- **%s** — `.revo/workspaces/%s/` (branch: feature/%s)\n' \
-                "$ws_name" "$ws_name" "$ws_name" >> "$output"
+            local ws_abs_path="${workspaces_dir}/${ws_name}"
+            printf -- '- **%s** — `%s` (branch: feature/%s)\n' \
+                "$ws_name" "$ws_abs_path" "$ws_name" >> "$output"
+            # List any databases associated with this workspace
+            local wi
+            for ((wi = 0; wi < YAML_REPO_COUNT; wi++)); do
+                local ws_dbt ws_dbn
+                ws_dbt=$(yaml_get_db_type "$wi")
+                ws_dbn=$(yaml_get_db_name "$wi")
+                if [[ -n "$ws_dbt" ]] && [[ -n "$ws_dbn" ]]; then
+                    local ws_db_full
+                    ws_db_full=$(_db_workspace_name "$ws_dbn" "$ws_name")
+                    printf -- '  - Database: `%s` (%s)\n' "$ws_db_full" "$ws_dbt" >> "$output"
+                fi
+            done
         done
         if [[ $has_workspaces -eq 1 ]]; then
             {
@@ -366,10 +379,12 @@ _context_write_file() {
         printf '3. Start implementing according to the plan. Follow the dependency order in this file.\n'
         printf '\n'
         printf '**"Work on feature X use workspaces" or "use workspace":**\n'
-        printf '1. Run `revo workspace X` to create an isolated copy at `.revo/workspaces/X/`\n'
-        printf '2. cd into `.revo/workspaces/X/` — all subsequent revo commands operate on the workspace\n'
-        printf '3. Read `.revo/features/X.md` (in the workspace root) for context\n'
-        printf '4. Implement the feature. Commit with `revo commit "msg"` when ready.\n'
+        printf '1. Run `revo workspace X` to create an isolated copy\n'
+        printf '2. ALWAYS tell the user the absolute workspace path so they can navigate to it\n'
+        printf '3. If databases were cloned, ALWAYS tell the user the workspace database name(s)\n'
+        printf '4. cd into the workspace path — all subsequent revo commands operate on the workspace\n'
+        printf '5. Read `.revo/features/X.md` (in the workspace root) for context\n'
+        printf '6. Implement the feature. Commit with `revo commit "msg"` when ready.\n'
         printf '\n'
         printf '**"Create a feature for X" or "Plan feature X":**\n'
         printf '1. Run `revo feature X` to create branches and `.revo/features/X.md`\n'
