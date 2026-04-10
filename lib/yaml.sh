@@ -15,12 +15,15 @@ YAML_REPO_PATHS=()
 YAML_REPO_TAGS=()
 YAML_REPO_DEPS=()
 YAML_REPO_BRANCHES=()
+YAML_REPO_DB_TYPES=()
+YAML_REPO_DB_NAMES=()
 
 yaml_parse() {
     local file="$1"
     local line
     local in_repos=0
     local in_defaults=0
+    local in_database=0
     local current_index=-1
 
     # Reset state
@@ -32,6 +35,8 @@ yaml_parse() {
     YAML_REPO_TAGS=()
     YAML_REPO_DEPS=()
     YAML_REPO_BRANCHES=()
+    YAML_REPO_DB_TYPES=()
+    YAML_REPO_DB_NAMES=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -61,8 +66,8 @@ yaml_parse() {
             continue
         fi
 
-        # Parse workspace name
-        if [[ "$trimmed" =~ ^name:[[:space:]]*[\"\']?([^\"\']+)[\"\']?$ ]]; then
+        # Parse workspace name (only outside repos/defaults sections)
+        if [[ $in_repos -eq 0 ]] && [[ $in_defaults -eq 0 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*[\"\']?([^\"\']+)[\"\']?$ ]]; then
             YAML_WORKSPACE_NAME="${BASH_REMATCH[1]}"
             continue
         fi
@@ -86,6 +91,9 @@ yaml_parse() {
                 YAML_REPO_TAGS[$current_index]=""
                 YAML_REPO_DEPS[$current_index]=""
                 YAML_REPO_BRANCHES[$current_index]=""
+                YAML_REPO_DB_TYPES[$current_index]=""
+                YAML_REPO_DB_NAMES[$current_index]=""
+                in_database=0
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
             fi
@@ -111,6 +119,25 @@ yaml_parse() {
                     YAML_REPO_DEPS[$current_index]="$deps_str"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
                     YAML_REPO_BRANCHES[$current_index]="${BASH_REMATCH[1]}"
+                elif [[ "$trimmed" == "database:" ]]; then
+                    in_database=1
+                elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
+                    local db_type_val="${BASH_REMATCH[1]}"
+                    case "$db_type_val" in
+                        postgres|mongodb|mysql)
+                            YAML_REPO_DB_TYPES[$current_index]="$db_type_val"
+                            ;;
+                        *)
+                            printf 'Warning: unsupported database type "%s", ignoring\n' "$db_type_val" >&2
+                            ;;
+                    esac
+                elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*(.+)$ ]]; then
+                    local db_name_val="${BASH_REMATCH[1]}"
+                    if [[ "$db_name_val" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+                        YAML_REPO_DB_NAMES[$current_index]="$db_name_val"
+                    else
+                        printf 'Warning: invalid database name "%s", ignoring\n' "$db_name_val" >&2
+                    fi
                 fi
             fi
         fi
@@ -192,6 +219,18 @@ yaml_get_branch() {
     printf '%s' "${YAML_REPO_BRANCHES[$idx]:-}"
 }
 
+# Get repo database type by index (postgres, mongodb, mysql, or empty)
+yaml_get_db_type() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_DB_TYPES[$idx]:-}"
+}
+
+# Get repo database name by index
+yaml_get_db_name() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_DB_NAMES[$idx]:-}"
+}
+
 # Find repo index by name (path basename)
 # Usage: idx=$(yaml_find_by_name "backend")
 # Returns: index or -1 if not found
@@ -250,6 +289,15 @@ yaml_write() {
             if [[ -n "$branch" ]] && [[ "$branch" != "$YAML_DEFAULTS_BRANCH" ]]; then
                 printf '    branch: %s\n' "$branch"
             fi
+
+            # Write database if present
+            local db_type="${YAML_REPO_DB_TYPES[$i]:-}"
+            local db_name="${YAML_REPO_DB_NAMES[$i]:-}"
+            if [[ -n "$db_type" ]] && [[ -n "$db_name" ]]; then
+                printf '    database:\n'
+                printf '      type: %s\n' "$db_type"
+                printf '      name: %s\n' "$db_name"
+            fi
         done
 
         printf '\ndefaults:\n'
@@ -258,13 +306,15 @@ yaml_write() {
 }
 
 # Add a repo to the config
-# Usage: yaml_add_repo "url" "path" "tags" "deps" ["branch"]
+# Usage: yaml_add_repo "url" "path" "tags" "deps" ["branch" ["db_type" "db_name"]]
 yaml_add_repo() {
     local url="$1"
     local path="${2:-}"
     local tags="${3:-}"
     local deps="${4:-}"
     local branch="${5:-}"
+    local db_type="${6:-}"
+    local db_name="${7:-}"
 
     local idx=$YAML_REPO_COUNT
 
@@ -277,6 +327,8 @@ yaml_add_repo() {
     YAML_REPO_TAGS[$idx]="$tags"
     YAML_REPO_DEPS[$idx]="$deps"
     YAML_REPO_BRANCHES[$idx]="$branch"
+    YAML_REPO_DB_TYPES[$idx]="$db_type"
+    YAML_REPO_DB_NAMES[$idx]="$db_name"
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }

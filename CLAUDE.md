@@ -81,6 +81,7 @@ lib/
 ├── config.sh       # Workspace detection and config loading
 ├── git.sh          # Git wrapper with output capture
 ├── scan.sh         # Per-repo framework/language/route detection (for revo context)
+├── db.sh           # Database clone/drop for workspace isolation (postgres/mongodb/mysql)
 └── commands/
     ├── init.sh       # workspace commands (init auto-detects existing repos)
     ├── detect.sh     # bootstrap revo around an existing folder of clones
@@ -143,6 +144,9 @@ repos:
     path: api                    # optional custom path
     tags: [backend, api]
     depends_on: [shared-types]   # Revo-only: dependency ordering
+    database:                    # optional: local DB to clone per workspace
+      type: postgres             # postgres | mongodb | mysql
+      name: myapp_dev            # local database name
   - url: git@github.com:org/frontend.git
     tags: [frontend]
     depends_on: [backend]
@@ -153,6 +157,11 @@ defaults:
 `depends_on` is optional. It references other repos by their path basename
 (derived from the URL unless overridden by `path`). It drives the topological
 sort in the generated CLAUDE.md and has no effect on clone/sync order.
+
+`database` is optional. When present, `revo workspace` clones the named
+database to a workspace-scoped copy (e.g., `myapp_dev_ws_feature_name`)
+and drops it on `revo workspace --delete` or `--clean`. The DB CLI tools
+(`psql`/`mongodump`/`mysql`) must be installed; DB errors are non-fatal.
 
 ## Implementation Constraints
 

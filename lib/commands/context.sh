@@ -238,6 +238,19 @@ _context_write_file() {
             if [[ $SCAN_HAS_DOCKER -eq 1 ]]; then
                 printf -- '- **Containerized:** yes\n' >> "$output"
             fi
+
+            local db_type db_name
+            db_type=$(yaml_get_db_type "$i")
+            db_name=$(yaml_get_db_name "$i")
+            if [[ -n "$db_type" ]] && [[ -n "$db_name" ]]; then
+                if [[ -n "${REVO_ACTIVE_WORKSPACE:-}" ]]; then
+                    local ws_db
+                    ws_db=$(_db_workspace_name "$db_name" "$REVO_ACTIVE_WORKSPACE")
+                    printf -- '- **Database (workspace):** %s (%s)\n' "$ws_db" "$db_type" >> "$output"
+                else
+                    printf -- '- **Database:** %s (%s)\n' "$db_name" "$db_type" >> "$output"
+                fi
+            fi
         else
             printf -- '- **Status:** not cloned (run `revo clone`)\n' >> "$output"
             if [[ -n "$url" ]]; then

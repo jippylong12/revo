@@ -7,6 +7,8 @@ cmd_add() {
     local path=""
     local tags=""
     local deps=""
+    local db_type=""
+    local db_name=""
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -26,6 +28,21 @@ cmd_add() {
                 deps="$2"
                 shift 2
                 ;;
+            --database)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --database requires type:name (e.g., postgres:myapp_dev)"; return 1; }
+                local db_spec="$2"
+                db_type="${db_spec%%:*}"
+                db_name="${db_spec#*:}"
+                if [[ -z "$db_type" ]] || [[ -z "$db_name" ]] || [[ "$db_type" == "$db_name" ]]; then
+                    ui_step_error "Invalid --database format. Use type:name (e.g., postgres:myapp_dev)"
+                    return 1
+                fi
+                case "$db_type" in
+                    postgres|mongodb|mysql) ;;
+                    *) ui_step_error "Unsupported database type: $db_type (use postgres, mongodb, or mysql)"; return 1 ;;
+                esac
+                shift 2
+                ;;
             -*)
                 ui_step_error "Unknown option: $1"
                 return 1
@@ -43,7 +60,7 @@ cmd_add() {
     done
 
     if [[ -z "$url" ]]; then
-        ui_step_error "Usage: revo add <url> [--tags tag1,tag2] [--path custom-path] [--depends-on repo1,repo2]"
+        ui_step_error "Usage: revo add <url> [--tags tag1,tag2] [--path custom-path] [--depends-on repo1,repo2] [--database type:name]"
         return 1
     fi
 
@@ -75,7 +92,7 @@ cmd_add() {
     ui_intro "Revo - Add Repository"
 
     # Add to config
-    yaml_add_repo "$url" "$path" "$tags" "$deps"
+    yaml_add_repo "$url" "$path" "$tags" "$deps" "" "$db_type" "$db_name"
 
     # Save config
     config_save
@@ -88,6 +105,10 @@ cmd_add() {
 
     if [[ -n "$deps" ]]; then
         ui_info "Depends on: $deps"
+    fi
+
+    if [[ -n "$db_type" ]]; then
+        ui_info "Database: $db_name ($db_type)"
     fi
 
     ui_bar_line

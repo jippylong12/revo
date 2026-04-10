@@ -255,6 +255,112 @@ test_depends_on_roundtrip() {
     test_pass
 }
 
+test_database_parse() {
+    test_start "yaml_parse - database block"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: db-test
+repos:
+  - url: git@github.com:org/backend.git
+    tags: [backend]
+    database:
+      type: postgres
+      name: myapp_dev
+  - url: git@github.com:org/frontend.git
+    tags: [frontend]
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "db-test" "$YAML_WORKSPACE_NAME" || { rm "$test_file"; return 1; }
+    assert_eq "postgres" "$(yaml_get_db_type 0)" || { rm "$test_file"; return 1; }
+    assert_eq "myapp_dev" "$(yaml_get_db_name 0)" || { rm "$test_file"; return 1; }
+    assert_eq "" "$(yaml_get_db_type 1)" || { rm "$test_file"; return 1; }
+    assert_eq "" "$(yaml_get_db_name 1)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_database_roundtrip() {
+    test_start "yaml_write - database roundtrip"
+
+    YAML_WORKSPACE_NAME="db-rt"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=2
+    YAML_REPO_URLS=("git@github.com:o/a.git" "git@github.com:o/b.git")
+    YAML_REPO_PATHS=("a" "b")
+    YAML_REPO_TAGS=("backend" "frontend")
+    YAML_REPO_DEPS=("" "")
+    YAML_REPO_BRANCHES=("" "")
+    YAML_REPO_DB_TYPES=("postgres" "")
+    YAML_REPO_DB_NAMES=("mydb" "")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq "2" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    assert_eq "postgres" "$(yaml_get_db_type 0)" || { rm "$test_file"; return 1; }
+    assert_eq "mydb" "$(yaml_get_db_name 0)" || { rm "$test_file"; return 1; }
+    assert_eq "" "$(yaml_get_db_type 1)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_database_add_repo() {
+    test_start "yaml_add_repo - with database"
+
+    YAML_REPO_COUNT=0
+    YAML_REPO_URLS=()
+    YAML_REPO_PATHS=()
+    YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
+    YAML_REPO_BRANCHES=()
+    YAML_REPO_DB_TYPES=()
+    YAML_REPO_DB_NAMES=()
+
+    yaml_add_repo "git@github.com:org/api.git" "" "backend" "" "" "mongodb" "api_db"
+
+    assert_eq "1" "$YAML_REPO_COUNT" || return 1
+    assert_eq "mongodb" "$(yaml_get_db_type 0)" || return 1
+    assert_eq "api_db" "$(yaml_get_db_name 0)" || return 1
+
+    test_pass
+}
+
+test_database_invalid_name_rejected() {
+    test_start "yaml_parse - rejects invalid database name"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: bad-db
+repos:
+  - url: git@github.com:org/repo.git
+    database:
+      type: postgres
+      name: bad'; DROP TABLE x; --
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file" 2>/dev/null
+
+    # Invalid name should be ignored, leaving empty
+    assert_eq "" "$(yaml_get_db_name 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
 # --- Run tests ---
 
 printf "\n=== YAML Parser Tests ===\n\n"
@@ -267,6 +373,10 @@ test_add_repo
 test_depends_on_parse
 test_find_by_name
 test_depends_on_roundtrip
+test_database_parse
+test_database_roundtrip
+test_database_add_repo
+test_database_invalid_name_rejected
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

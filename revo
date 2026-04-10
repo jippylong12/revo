@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.6.2"
+REVO_VERSION="0.7.0"
 
 # Determine script directory for sourcing libs
 REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +21,7 @@ if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
     source "$REVO_SCRIPT_DIR/lib/config.sh"
     source "$REVO_SCRIPT_DIR/lib/git.sh"
     source "$REVO_SCRIPT_DIR/lib/scan.sh"
+    source "$REVO_SCRIPT_DIR/lib/db.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/init.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/detect.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/clone.sh"
@@ -51,7 +52,7 @@ Usage: revo <command> [options]
 Workspace commands:
   init                        Initialize a new workspace (auto-detects existing repos)
   detect                      Bootstrap revo around existing git repos in cwd
-  add URL [--tags TAGS]       Add a repository to the workspace
+  add URL [options]            Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
   list [--tag TAG]            List configured repositories
   status [--tag TAG]          Show status of all repositories
