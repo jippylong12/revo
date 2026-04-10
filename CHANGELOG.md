@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0] - 2026-04-09
+
+### Added
+- `revo issue list` — wraps `gh issue list` across every repo in the
+  workspace. Defaults to open issues, supports `--tag`, `--state`,
+  `--label`, `--limit`. Pass `--json` to emit a flat JSON array (each
+  entry has a `repo` field) so Claude or jq can filter cross-repo issue
+  state without traversing a nested map.
+- `revo issue create` — wraps `gh issue create`. Two modes:
+  - `--repo NAME` for an explicit single-repo create.
+  - `--tag TAG` to create the same issue in every repo with that tag,
+    automatically cross-referencing each issue's body with the URLs of
+    its sibling issues (same Pass-2 link pattern as `revo pr`).
+  Optional `--feature NAME` appends the created issue links to
+  `.revo/features/<NAME>.md` and references the brief from each issue
+  body, so a single command produces linked issues + an updated feature
+  brief in one shot.
+- The auto-generated `CLAUDE.md` block now documents `revo issue
+  list/create` so Claude Code discovers them when working in a revo
+  workspace.
+
 ## [0.4.0] - 2026-04-09
 
 ### Fixed

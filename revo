@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.4.0"
+REVO_VERSION="0.5.0"
 
 # Determine script directory for sourcing libs
 REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -36,6 +36,7 @@ if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
     source "$REVO_SCRIPT_DIR/lib/commands/commit.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/push.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/pr.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/issue.sh"
 fi
 # In bundled mode, all functions are already in this file
 
@@ -64,6 +65,8 @@ Claude-first commands:
   commit MSG [--tag TAG]      Commit changes across dirty repos
   push [--tag TAG]            Push branches across repositories
   pr TITLE [--tag TAG]        Create coordinated PRs via gh CLI
+  issue list [options]        List issues across workspace repos
+  issue create [options] TITLE Create issue(s) in workspace repos
 
 Options:
   --tag TAG       Filter repositories by tag
@@ -85,6 +88,10 @@ Examples:
   revo commit "wire up clock endpoint"
   revo push
   revo pr "Clock endpoint for students" --tag backend
+  revo issue list --state open                       # all open issues
+  revo issue list --tag backend --json               # JSON for Claude/jq
+  revo issue create --repo backend "Add stats endpoint"
+  revo issue create --tag mobile --feature stats "Add statistics screen"
 
 Documentation: https://github.com/jippylong12/revo
 EOF
@@ -152,6 +159,9 @@ main() {
             ;;
         pr)
             cmd_pr "$@"
+            ;;
+        issue|issues)
+            cmd_issue "$@"
             ;;
         --help|-h|help)
             show_help
