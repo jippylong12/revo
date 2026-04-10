@@ -19,7 +19,7 @@ fi
 cat > "$OUTPUT_FILE" << 'HEADER'
 #!/usr/bin/env bash
 # Revo CLI - Claude-first multi-repo workspace manager
-# https://github.com/marcus.salinas/revo
+# https://github.com/jippylong12/revo
 # This is a bundled distribution - do not edit
 
 set -euo pipefail

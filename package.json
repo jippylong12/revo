@@ -1,17 +1,17 @@
 {
-  "name": "revo-cli",
-  "version": "0.2.0",
+  "name": "@revotools/cli",
+  "version": "0.2.1",
   "description": "Claude-first multi-repo workspace manager (fork of Mars)",
   "bin": {
     "revo": "./dist/revo"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marcus.salinas/revo.git"
+    "url": "git+https://github.com/jippylong12/revo.git"
   },
-  "homepage": "https://github.com/marcus.salinas/revo",
+  "homepage": "https://github.com/jippylong12/revo",
   "bugs": {
-    "url": "https://github.com/marcus.salinas/revo/issues"
+    "url": "https://github.com/jippylong12/revo/issues"
   },
   "license": "MIT",
   "keywords": [

@@ -28,7 +28,7 @@ Renamed the project from **Mars** to **Revo** and added Claude-first commands.
 - Renamed globals: `MARS_*` → `REVO_*`
 - Renamed npm package: `@dean0x/mars` → `revo-cli`
 - `revo init` now also adds `.revo/` to `.gitignore`
-- Repository moved to `marcus.salinas/revo`; Mars remains upstream
+- Repository moved to `jippylong12/revo`; Mars remains upstream
 
 ### Migration from Mars
 

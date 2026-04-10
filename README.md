@@ -166,7 +166,7 @@ my-project/
 ### Manual (recommended while pre-release)
 
 ```bash
-git clone https://github.com/marcus.salinas/revo.git
+git clone https://github.com/jippylong12/revo.git
 cd revo
 ./build.sh
 cp dist/revo ~/.local/bin/  # or anywhere in PATH
@@ -175,7 +175,7 @@ cp dist/revo ~/.local/bin/  # or anywhere in PATH
 ### Shell Script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/marcus.salinas/revo/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jippylong12/revo/main/install.sh | bash
 ```
 
 ### npm

@@ -5,7 +5,7 @@
 Clone the repo and run directly in development mode:
 
 ```bash
-git clone https://github.com/marcus.salinas/revo.git
+git clone https://github.com/jippylong12/revo.git
 cd revo
 ./revo init  # Sources from lib/ directory
 ```

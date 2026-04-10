@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Revo CLI - Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/marcus.salinas/revo/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/jippylong12/revo/main/install.sh | bash
 # Override version: REVO_VERSION=0.2.0 curl -fsSL ... | bash
 
 set -euo pipefail
@@ -9,7 +9,7 @@ set -euo pipefail
 REVO_VERSION="${REVO_VERSION:-latest}"
 REVO_INSTALL_DIR="${REVO_INSTALL_DIR:-$HOME/.revo}"
 REVO_BIN_DIR="$REVO_INSTALL_DIR/bin"
-REVO_REPO="marcus.salinas/revo"
+REVO_REPO="jippylong12/revo"
 
 # Colors (if terminal supports it)
 if [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]; then

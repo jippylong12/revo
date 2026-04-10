@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Revo CLI - Claude-first multi-repo workspace manager
-# https://github.com/marcus.salinas/revo
+# https://github.com/jippylong12/revo
 # Fork of Mars (https://github.com/dean0x/mars) with Claude-first additions
 
 set -euo pipefail
@@ -84,7 +84,7 @@ Examples:
   revo push
   revo pr "Clock endpoint for students" --tag backend
 
-Documentation: https://github.com/marcus.salinas/revo
+Documentation: https://github.com/jippylong12/revo
 EOF
 }
 
