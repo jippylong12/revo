@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.0] - 2026-04-09
 
 ### Added
 - `revo detect` — bootstraps a workspace around git repos that already exist
