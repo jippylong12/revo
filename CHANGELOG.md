@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.6.2] - 2026-04-10
+
+### Changed
+- **Rewrote generated CLAUDE.md agent instructions** — passive tips replaced
+  with directive workflows. When Claude Code opens a revo workspace it now
+  gets explicit "when the user says X, do Y" patterns (work on feature,
+  use workspaces, commit/push/PR) instead of a command reference wall.
+- Moved the full command reference to `.revo/COMMANDS.md` (generated
+  alongside CLAUDE.md, available on-demand). The main CLAUDE.md stays
+  focused on behavioral instructions.
+
+### Fixed
+- All commands now validate that flag values are provided before consuming
+  them. `revo list --tag` (missing value) now shows a clean error instead
+  of crashing with "unbound variable".
+- `revo exec` uses `bash -c` instead of `eval` to isolate user commands
+  from revo's internal shell state.
+- `config_load` now propagates `yaml_parse` failures instead of silently
+  returning success with empty state.
+- `_scan_pkg_has_dep` uses `grep -F` (fixed-string mode) so dependency
+  names with regex metacharacters (e.g. `@nestjs/core`) match correctly.
+
 ## [0.6.1] - 2026-04-10
 
 ### Added

@@ -11,6 +11,7 @@ cmd_exec() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tag)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }
                 tag="$2"
                 shift 2
                 ;;
@@ -81,7 +82,7 @@ cmd_exec() {
         local output
         local exit_code
 
-        if output=$(cd "$full_path" && eval "$command" 2>&1); then
+        if output=$(cd "$full_path" && bash -c "$command" 2>&1); then
             exit_code=0
         else
             exit_code=$?

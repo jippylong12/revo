@@ -44,7 +44,7 @@ _scan_json_string() {
 _scan_pkg_has_dep() {
     local file="$1"
     local dep="$2"
-    grep -q "\"$dep\"[[:space:]]*:" "$file" 2>/dev/null
+    grep -qF "\"$dep\"" "$file" 2>/dev/null
 }
 
 # Detect framework from package.json dependencies

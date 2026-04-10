@@ -328,38 +328,87 @@ _context_write_file() {
         done
     fi
 
-    # Agent instructions + revo tool docs
+    # Agent instructions — directive workflows for Claude Code
     {
         printf '\n'
         printf '## Agent Instructions\n'
         printf '\n'
-        printf 'When working in this workspace:\n'
+        printf 'You are working in a multi-repo workspace managed by **revo**. Do NOT explore\n'
+        printf 'to figure out what revo is — it is a CLI tool already installed in the terminal. Use it.\n'
         printf '\n'
-        printf '1. Read this file first to understand the repo structure\n'
-        printf '2. Check `.revo/features/` for active feature contexts\n'
-        printf '3. Follow the dependency order above when making cross-repo changes\n'
-        printf '4. Each repo may have its own CLAUDE.md with repo-specific instructions\n'
-        printf '5. Use `revo status` to check state across all repos\n'
-        printf '6. Use `revo commit "msg"` to commit across all repos at once\n'
-        printf '7. Use `revo feature <name>` to start a coordinated feature workspace\n'
-        printf '8. Use `revo pr "title"` to open coordinated pull requests\n'
-        printf '9. Use `revo workspace <name>` to get a full-copy isolated workspace\n'
-        printf '   under `.revo/workspaces/<name>/` (zero bootstrap, .env included)\n'
+        printf '### Critical Rules\n'
         printf '\n'
-        printf '## Workspace Tool: revo\n'
+        printf -- '- ALWAYS read `.revo/features/<name>.md` before starting work on any feature. It contains the plan.\n'
+        printf -- '- NEVER ask "what is the scope?" for a feature that has a feature file. The file IS the scope.\n'
+        printf -- '- When uncertain about revo commands, run `revo --help` or read `.revo/COMMANDS.md`.\n'
+        printf -- '- Use `revo` commands for all cross-repo git operations. Do not manually cd into each repo and run git.\n'
+        printf -- '- Each repo may have its own CLAUDE.md with repo-specific instructions — read it when working in that repo.\n'
+        printf -- '- Follow the dependency order above when making cross-repo changes.\n'
         printf '\n'
-        printf 'This workspace is managed by revo.\n'
+        printf '### Workflows\n'
+        printf '\n'
+        printf '**"Work on feature X" or "Begin work on X":**\n'
+        printf '1. Read `.revo/features/X.md` for the plan (if it does not exist, run `revo feature X` first)\n'
+        printf '2. Run `revo status` to confirm you are on the right branches\n'
+        printf '3. Start implementing according to the plan. Follow the dependency order in this file.\n'
+        printf '\n'
+        printf '**"Work on feature X use workspaces" or "use workspace":**\n'
+        printf '1. Run `revo workspace X` to create an isolated copy at `.revo/workspaces/X/`\n'
+        printf '2. cd into `.revo/workspaces/X/` — all subsequent revo commands operate on the workspace\n'
+        printf '3. Read `.revo/features/X.md` (in the workspace root) for context\n'
+        printf '4. Implement the feature. Commit with `revo commit "msg"` when ready.\n'
+        printf '\n'
+        printf '**"Create a feature for X" or "Plan feature X":**\n'
+        printf '1. Run `revo feature X` to create branches and `.revo/features/X.md`\n'
+        printf '2. Edit `.revo/features/X.md` with the plan (scope, affected repos, approach)\n'
+        printf '\n'
+        printf '**"Commit" or "Save progress":**\n'
+        printf '1. Run `revo commit "descriptive message"` — stages and commits all dirty repos\n'
+        printf '\n'
+        printf '**"Push and PR" or "Open pull requests":**\n'
+        printf '1. Run `revo push` to push all branches\n'
+        printf '2. Run `revo pr "PR title"` to create coordinated, cross-referenced PRs\n'
+        printf '\n'
+        printf '**"Status" or "Sync":**\n'
+        printf '1. `revo status` — branch and dirty state across all repos\n'
+        printf '2. `revo sync` — pull latest across all repos\n'
+        printf '\n'
+        printf '### Quick Reference\n'
+        printf '\n'
+        printf 'Run `revo --help` for all commands. Key ones: `status`, `commit`, `push`,\n'
+        printf '`pr`, `feature`, `workspace`, `sync`, `exec`, `checkout default`, `issue list`.\n'
+        printf 'All commands accept `--tag TAG` to filter by repo tag.\n'
+        printf 'See `.revo/COMMANDS.md` for the full command reference with examples.\n'
+        printf '\n'
+        printf '%s\n' "$CONTEXT_END_MARKER"
+    } >> "$output"
+
+    # Splice the auto block into the target file, preserving any user content.
+    _context_merge_into "$output" "$target"
+    rm -f "$output"
+}
+
+# Write the .revo/COMMANDS.md reference file. Detailed command docs that
+# Claude Code can read on-demand, kept out of the main CLAUDE.md so the
+# agent sees directive workflows first, not a wall of syntax.
+_context_write_commands_file() {
+    local target="$REVO_WORKSPACE_ROOT/.revo/COMMANDS.md"
+    mkdir -p "$REVO_WORKSPACE_ROOT/.revo"
+
+    {
+        printf '# revo Command Reference\n'
+        printf '\n'
         printf 'Source: https://github.com/jippylong12/revo\n'
         printf '\n'
-        printf '### Available commands (run in terminal)\n'
+        printf '## Setup\n'
         printf '\n'
-        printf '**Setup:**\n'
         printf -- '- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo\n'
         printf -- '- `revo clone` — clone all configured repos\n'
-        printf -- '- `revo context` — regenerate this file\n'
+        printf -- '- `revo context` — regenerate workspace CLAUDE.md\n'
         printf -- '- `revo detect` — bootstrap around existing repos in cwd\n'
         printf '\n'
-        printf '**Daily workflow:**\n'
+        printf '## Daily Workflow\n'
+        printf '\n'
         printf -- '- `revo status` — branch and dirty state across all repos\n'
         printf -- '- `revo sync` — pull latest across all repos\n'
         printf -- '- `revo feature <name> [--tag t]` — create feature branch across repos\n'
@@ -368,53 +417,64 @@ _context_write_file() {
         printf -- '- `revo pr "title" [--tag t]` — create coordinated PRs via gh CLI\n'
         printf -- '- `revo exec "cmd" [--tag t]` — run command in filtered repos\n'
         printf -- '- `revo checkout <branch> [--tag t]` — switch branch across repos\n'
+        printf -- '- `revo checkout default` — switch each repo to its own default branch (handles mixed main/master)\n'
         printf '\n'
-        printf '**Workspaces (full-copy isolated workspaces):**\n'
+        printf '## Workspaces\n'
+        printf '\n'
         printf -- '- `revo workspace <name> [--tag t]` — full copy of repos into `.revo/workspaces/<name>/` on `feature/<name>`\n'
         printf -- '- `revo workspaces` — list active workspaces with branch and dirty state\n'
         printf -- '- `revo workspace <name> --delete [--force]` — remove a workspace\n'
         printf -- '- `revo workspace --clean` — remove workspaces whose branches are merged\n'
         printf '\n'
         printf 'Workspaces hardlink-copy everything (including `.env`, `node_modules`,\n'
-        printf 'build artifacts) so Claude can start work with zero bootstrap. Run\n'
+        printf 'build artifacts) so you can start work with zero bootstrap. Run\n'
         printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
         printf 'workspace copies, not the source tree.\n'
         printf '\n'
-        printf '**Issues (cross-repo, via gh CLI):**\n'
+        printf '## Issues (cross-repo, via gh CLI)\n'
+        printf '\n'
         printf -- '- `revo issue list [--tag t] [--state open|closed|all] [--label L] [--json]` — list issues across repos\n'
         printf -- '- `revo issue create --repo <name> "title" [--body b] [--label L] [--feature F]` — create in one repo\n'
         printf -- '- `revo issue create --tag <t> "title" [--body b] [--feature F]` — create in every matching repo, cross-referenced\n'
         printf '\n'
         printf 'Use `--json` on `revo issue list` to get a flat JSON array (each entry has\n'
-        printf 'a `repo` field) — easy to filter or pipe into jq when reasoning about\n'
-        printf 'cross-repo issue state.\n'
+        printf 'a `repo` field) — easy to filter or pipe into jq.\n'
         printf '\n'
-        printf '### Tag filtering\n'
+        printf '## Tag Filtering\n'
         printf '\n'
         printf 'All commands support `--tag <tag>` to target specific repos:\n'
         printf '\n'
         printf '```\n'
         printf 'revo exec "npm test" --tag frontend\n'
         printf 'revo sync --tag backend\n'
-        printf 'revo branch hotfix --tag api\n'
+        printf 'revo commit "fix: typo" --tag api\n'
         printf '```\n'
         printf '\n'
-        printf '### Feature workflow\n'
+        printf '## Feature Workflow\n'
         printf '\n'
         printf '```\n'
-        printf 'revo feature my-feature          # branches all repos\n'
-        printf '# edit .revo/features/my-feature.md to describe scope\n'
+        printf 'revo feature my-feature          # branches all repos, writes .revo/features/my-feature.md\n'
+        printf '# edit .revo/features/my-feature.md with your plan\n'
         printf '# work across repos\n'
         printf 'revo commit "feat: my feature"   # commits all dirty repos\n'
+        printf 'revo push                        # push all branches\n'
         printf 'revo pr "My feature"             # coordinated PRs\n'
         printf '```\n'
         printf '\n'
-        printf '%s\n' "$CONTEXT_END_MARKER"
-    } >> "$output"
-
-    # Splice the auto block into the target file, preserving any user content.
-    _context_merge_into "$output" "$target"
-    rm -f "$output"
+        printf '## Workspace Workflow\n'
+        printf '\n'
+        printf '```\n'
+        printf 'revo workspace my-feature        # full copy to .revo/workspaces/my-feature/\n'
+        printf 'cd .revo/workspaces/my-feature   # enter the workspace\n'
+        printf 'revo status                      # operates on workspace repos\n'
+        printf '# work across repos\n'
+        printf 'revo commit "feat: my feature"   # commits workspace repos\n'
+        printf 'revo push                        # push workspace branches\n'
+        printf 'revo pr "My feature"             # coordinated PRs from workspace\n'
+        printf 'cd ../../..                      # back to main workspace\n'
+        printf 'revo workspace my-feature --delete  # clean up\n'
+        printf '```\n'
+    } > "$target"
 }
 
 cmd_context() {
@@ -451,8 +511,10 @@ cmd_context() {
     # Persist any newly detected per-repo branches back to revo.yaml
     config_save
     ui_spinner_stop
+    _context_write_commands_file
     ui_step_done "Scanned:" "$YAML_REPO_COUNT repositories"
     ui_step_done "Wrote:" "CLAUDE.md"
+    ui_step_done "Wrote:" ".revo/COMMANDS.md"
 
     if [[ $CONTEXT_CYCLE -eq 1 ]]; then
         ui_step_error "Dependency cycle detected - see CLAUDE.md for order"
@@ -471,6 +533,7 @@ context_regenerate_silent() {
 
     local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
     _context_write_file "$output"
+    _context_write_commands_file
     ui_info "$(ui_dim "Regenerated CLAUDE.md for Claude Code")"
     return 0
 }

@@ -10,6 +10,7 @@ cmd_sync() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tag)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }
                 tag="$2"
                 shift 2
                 ;;

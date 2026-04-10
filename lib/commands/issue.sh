@@ -64,10 +64,10 @@ _issue_list() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --tag) tag="$2"; shift 2 ;;
-            --state) state="$2"; shift 2 ;;
-            --label) label="$2"; shift 2 ;;
-            --limit) limit="$2"; shift 2 ;;
+            --tag) [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }; tag="$2"; shift 2 ;;
+            --state) [[ $# -lt 2 ]] && { ui_step_error "Option --state requires a value"; return 1; }; state="$2"; shift 2 ;;
+            --label) [[ $# -lt 2 ]] && { ui_step_error "Option --label requires a value"; return 1; }; label="$2"; shift 2 ;;
+            --limit) [[ $# -lt 2 ]] && { ui_step_error "Option --limit requires a value"; return 1; }; limit="$2"; shift 2 ;;
             --json) as_json=1; shift ;;
             --help|-h) _issue_help; return 0 ;;
             *) ui_step_error "Unknown option: $1"; return 1 ;;
@@ -231,12 +231,12 @@ _issue_create() {
 
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --repo) repo="$2"; shift 2 ;;
-            --tag) tag="$2"; shift 2 ;;
-            --body) body="$2"; shift 2 ;;
-            --label) labels="$2"; shift 2 ;;
-            --assignee) assignee="$2"; shift 2 ;;
-            --feature) feature="$2"; shift 2 ;;
+            --repo) [[ $# -lt 2 ]] && { ui_step_error "Option --repo requires a value"; return 1; }; repo="$2"; shift 2 ;;
+            --tag) [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }; tag="$2"; shift 2 ;;
+            --body) [[ $# -lt 2 ]] && { ui_step_error "Option --body requires a value"; return 1; }; body="$2"; shift 2 ;;
+            --label) [[ $# -lt 2 ]] && { ui_step_error "Option --label requires a value"; return 1; }; labels="$2"; shift 2 ;;
+            --assignee) [[ $# -lt 2 ]] && { ui_step_error "Option --assignee requires a value"; return 1; }; assignee="$2"; shift 2 ;;
+            --feature) [[ $# -lt 2 ]] && { ui_step_error "Option --feature requires a value"; return 1; }; feature="$2"; shift 2 ;;
             --help|-h) _issue_help; return 0 ;;
             -*) ui_step_error "Unknown option: $1"; return 1 ;;
             *)

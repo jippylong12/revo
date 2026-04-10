@@ -1,6 +1,6 @@
 {
   "name": "@revotools/cli",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Claude-first multi-repo workspace manager (fork of Mars)",
   "bin": {
     "revo": "./dist/revo"

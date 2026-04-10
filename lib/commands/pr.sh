@@ -10,10 +10,12 @@ cmd_pr() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tag)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }
                 tag="$2"
                 shift 2
                 ;;
             --body)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --body requires a value"; return 1; }
                 body="$2"
                 shift 2
                 ;;

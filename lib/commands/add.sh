@@ -12,14 +12,17 @@ cmd_add() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tags)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --tags requires a value"; return 1; }
                 tags="$2"
                 shift 2
                 ;;
             --path)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --path requires a value"; return 1; }
                 path="$2"
                 shift 2
                 ;;
             --depends-on)
+                [[ $# -lt 2 ]] && { ui_step_error "Option --depends-on requires a value"; return 1; }
                 deps="$2"
                 shift 2
                 ;;

@@ -161,7 +161,9 @@ config_load() {
         return 1
     fi
 
-    yaml_parse "$REVO_CONFIG_FILE"
+    if ! yaml_parse "$REVO_CONFIG_FILE"; then
+        return 1
+    fi
 }
 
 # Save configuration
