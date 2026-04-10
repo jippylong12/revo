@@ -66,45 +66,13 @@ _init_scan_existing() {
     fi
 }
 
-# Write a Claude-first onboarding CLAUDE.md, or append a revo section if the
-# user already has their own CLAUDE.md in the workspace root.
+# Write a Claude-first onboarding CLAUDE.md if and only if the workspace
+# root has no CLAUDE.md yet. Existing files are left alone — `revo context`
+# will append its marker-wrapped auto block once repos are added.
 _init_write_claude_md() {
     local out="$REVO_WORKSPACE_ROOT/CLAUDE.md"
 
-    if [[ -f "$out" ]] && ! grep -q "managed by revo" "$out" 2>/dev/null; then
-        if grep -q "Workspace Tool: revo" "$out" 2>/dev/null; then
-            return 0
-        fi
-        cat >> "$out" << 'EOF'
-
----
-
-## Workspace Tool: revo
-
-This workspace uses revo to manage multiple repos.
-Source: https://github.com/jippylong12/revo
-
-### Setup commands
-- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo to workspace
-- `revo clone` — clone all configured repos
-- `revo context` — scan repos and regenerate the workspace context section
-
-### Daily commands
-- `revo status` — branch and dirty state across all repos
-- `revo sync` — pull latest across all repos
-- `revo feature <name>` — create feature branch across all repos
-- `revo commit "msg"` — commit all dirty repos with same message
-- `revo push` — push all repos
-- `revo pr "title"` — create coordinated PRs via gh CLI
-- `revo exec "cmd" --tag <tag>` — run command in filtered repos
-
-### Working in this workspace
-- Repos live in the repos/ subdirectory (or wherever configured in revo.yaml)
-- Edit files across repos directly
-- Check .revo/features/ for active feature briefs
-- Follow dependency order when making cross-repo changes
-EOF
-        ui_step_done "Appended revo section to existing CLAUDE.md"
+    if [[ -f "$out" ]]; then
         return 0
     fi
 
@@ -244,15 +212,17 @@ cmd_init() {
         fi
     fi
 
-    # Write the Claude-first onboarding CLAUDE.md (or append to user's own).
-    _init_write_claude_md
-
-    # If we detected repos, immediately generate the full workspace context.
+    # If we detected repos, hand off to cmd_context — it now wraps its output
+    # in BEGIN/END markers and preserves any user content in CLAUDE.md, so we
+    # don't need the onboarding placeholder. When no repos were detected,
+    # write the placeholder so Claude has something to read.
     if [[ $detected_count -gt 0 ]]; then
         ui_bar_line
         cmd_context
         return 0
     fi
+
+    _init_write_claude_md
 
     ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
     return 0

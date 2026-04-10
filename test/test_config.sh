@@ -145,6 +145,117 @@ test_config_find_root_mars_fallback() {
     fi
 }
 
+test_config_ensure_gitignore_creates_when_missing() {
+    test_start "config_ensure_gitignore - creates file when missing"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    mkdir -p "$test_dir"
+
+    config_ensure_gitignore "$test_dir/.gitignore"
+
+    if ! grep -q "^repos/$" "$test_dir/.gitignore"; then
+        test_fail ".gitignore missing repos/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q "^\.revo/$" "$test_dir/.gitignore"; then
+        test_fail ".gitignore missing .revo/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+
+    rm -rf "$test_dir"
+    test_pass
+}
+
+test_config_ensure_gitignore_preserves_existing() {
+    test_start "config_ensure_gitignore - preserves existing entries"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    mkdir -p "$test_dir"
+    printf 'node_modules/\n.env\ndist/\n' > "$test_dir/.gitignore"
+
+    config_ensure_gitignore "$test_dir/.gitignore"
+
+    # Original entries must still be present
+    if ! grep -q "^node_modules/$" "$test_dir/.gitignore"; then
+        test_fail "lost node_modules/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q "^\.env$" "$test_dir/.gitignore"; then
+        test_fail "lost .env"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q "^dist/$" "$test_dir/.gitignore"; then
+        test_fail "lost dist/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    # Revo entries appended
+    if ! grep -q "^repos/$" "$test_dir/.gitignore"; then
+        test_fail ".gitignore missing repos/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q "^\.revo/$" "$test_dir/.gitignore"; then
+        test_fail ".gitignore missing .revo/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+
+    rm -rf "$test_dir"
+    test_pass
+}
+
+test_config_ensure_gitignore_idempotent() {
+    test_start "config_ensure_gitignore - idempotent on second run"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    mkdir -p "$test_dir"
+    printf 'node_modules/\nrepos/\n' > "$test_dir/.gitignore"
+
+    config_ensure_gitignore "$test_dir/.gitignore"
+    config_ensure_gitignore "$test_dir/.gitignore"
+
+    # Should have exactly one repos/ line and exactly one .revo/ line
+    local repos_count revo_count
+    repos_count=$(grep -c "^repos/$" "$test_dir/.gitignore")
+    revo_count=$(grep -c "^\.revo/$" "$test_dir/.gitignore")
+
+    assert_eq "1" "$repos_count" || { rm -rf "$test_dir"; return 1; }
+    assert_eq "1" "$revo_count" || { rm -rf "$test_dir"; return 1; }
+
+    rm -rf "$test_dir"
+    test_pass
+}
+
+test_config_ensure_gitignore_handles_no_trailing_newline() {
+    test_start "config_ensure_gitignore - handles file without trailing newline"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    mkdir -p "$test_dir"
+    printf 'node_modules/' > "$test_dir/.gitignore"
+
+    config_ensure_gitignore "$test_dir/.gitignore"
+
+    # Original entry preserved on its own line, not merged with repos/
+    if ! grep -q "^node_modules/$" "$test_dir/.gitignore"; then
+        test_fail "node_modules/ was merged or lost"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q "^repos/$" "$test_dir/.gitignore"; then
+        test_fail "missing repos/"
+        rm -rf "$test_dir"
+        return 1
+    fi
+
+    rm -rf "$test_dir"
+    test_pass
+}
+
 test_config_repo_count() {
     test_start "config_repo_count"
 
@@ -186,6 +297,10 @@ EOF
 printf "\n=== Config Tests ===\n\n"
 
 test_config_init
+test_config_ensure_gitignore_creates_when_missing
+test_config_ensure_gitignore_preserves_existing
+test_config_ensure_gitignore_idempotent
+test_config_ensure_gitignore_handles_no_trailing_newline
 test_config_find_root
 test_config_find_root_mars_fallback
 test_config_repo_count

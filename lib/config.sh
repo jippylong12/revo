@@ -63,8 +63,52 @@ config_init() {
     # Write config
     yaml_write "$REVO_CONFIG_FILE"
 
-    # Create .gitignore
-    printf 'repos/\n.revo/\n' > "$dir/.gitignore"
+    # Merge revo's required entries into .gitignore without clobbering
+    # any existing user entries.
+    config_ensure_gitignore "$dir/.gitignore"
+
+    return 0
+}
+
+# Ensure the given .gitignore contains the entries revo needs
+# (`repos/` and `.revo/`). Existing content is preserved; only missing
+# entries are appended. Creates the file if it doesn't exist.
+# Usage: config_ensure_gitignore "/path/to/.gitignore"
+config_ensure_gitignore() {
+    local gitignore="$1"
+    local needed
+    needed=$(printf 'repos/\n.revo/\n')
+
+    if [[ ! -f "$gitignore" ]]; then
+        printf '%s\n' "$needed" > "$gitignore"
+        return 0
+    fi
+
+    # Append only the entries that aren't already present (exact line match,
+    # ignoring leading/trailing whitespace and comments).
+    local entry has_entry needs_newline=0
+    # If the file is non-empty and doesn't end in a newline, we need to add
+    # one before appending so we don't merge into an existing line.
+    if [[ -s "$gitignore" ]] && [[ -n "$(tail -c1 "$gitignore" 2>/dev/null)" ]]; then
+        needs_newline=1
+    fi
+
+    local appended=0
+    while IFS= read -r entry; do
+        [[ -z "$entry" ]] && continue
+        has_entry=$(awk -v e="$entry" '
+            { sub(/^[[:space:]]+/, ""); sub(/[[:space:]]+$/, "") }
+            $0 == e { found = 1; exit }
+            END { exit !found }
+        ' "$gitignore" && printf 'yes' || printf 'no')
+        if [[ "$has_entry" == "no" ]]; then
+            if [[ $appended -eq 0 ]] && [[ $needs_newline -eq 1 ]]; then
+                printf '\n' >> "$gitignore"
+            fi
+            printf '%s\n' "$entry" >> "$gitignore"
+            appended=1
+        fi
+    done <<< "$needed"
 
     return 0
 }

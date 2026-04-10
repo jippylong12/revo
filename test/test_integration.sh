@@ -186,6 +186,134 @@ test_context_generates_claude_md() {
     fi
 }
 
+test_init_preserves_existing_claude_md() {
+    test_start "revo init - preserves pre-existing CLAUDE.md"
+
+    setup_test_dir
+
+    # Pre-existing user CLAUDE.md
+    printf '# My Project\n\nUser content that must survive.\n' > CLAUDE.md
+
+    echo "preserve-test" | $REVO_CMD init > /dev/null 2>&1
+
+    if ! grep -q "# My Project" CLAUDE.md; then
+        test_fail "lost user heading"
+        return 1
+    fi
+    if ! grep -q "User content that must survive" CLAUDE.md; then
+        test_fail "lost user body content"
+        return 1
+    fi
+    test_pass
+}
+
+test_init_preserves_existing_gitignore() {
+    test_start "revo init - preserves pre-existing .gitignore entries"
+
+    setup_test_dir
+
+    printf 'node_modules/\n.env\ncoverage/\n' > .gitignore
+
+    echo "gitignore-test" | $REVO_CMD init > /dev/null 2>&1
+
+    # User entries preserved
+    if ! grep -q "^node_modules/$" .gitignore; then
+        test_fail "lost node_modules/"
+        return 1
+    fi
+    if ! grep -q "^\.env$" .gitignore; then
+        test_fail "lost .env"
+        return 1
+    fi
+    if ! grep -q "^coverage/$" .gitignore; then
+        test_fail "lost coverage/"
+        return 1
+    fi
+    # Revo entries appended
+    if ! grep -q "^repos/$" .gitignore; then
+        test_fail "missing repos/"
+        return 1
+    fi
+    if ! grep -q "^\.revo/$" .gitignore; then
+        test_fail "missing .revo/"
+        return 1
+    fi
+    test_pass
+}
+
+test_context_preserves_user_content() {
+    test_start "revo context - preserves user content above and below auto block"
+
+    setup_test_dir
+    echo "ctx-preserve" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+
+    # Generate the auto block once
+    $REVO_CMD context > /dev/null 2>&1
+
+    # Inject user content above and below the markers
+    local tmp
+    tmp=$(mktemp)
+    {
+        printf '# Pre-content above markers\n\n'
+        cat CLAUDE.md
+        printf '\n## Post-content below markers\n\nMore user notes.\n'
+    } > "$tmp"
+    mv "$tmp" CLAUDE.md
+
+    # Regenerate
+    $REVO_CMD context > /dev/null 2>&1
+
+    if ! grep -q "# Pre-content above markers" CLAUDE.md; then
+        test_fail "lost pre-content"
+        return 1
+    fi
+    if ! grep -q "## Post-content below markers" CLAUDE.md; then
+        test_fail "lost post-content heading"
+        return 1
+    fi
+    if ! grep -q "More user notes" CLAUDE.md; then
+        test_fail "lost post-content body"
+        return 1
+    fi
+    # Auto block still present
+    if ! grep -q "BEGIN revo:auto" CLAUDE.md; then
+        test_fail "missing BEGIN marker after regeneration"
+        return 1
+    fi
+    if ! grep -q "END revo:auto" CLAUDE.md; then
+        test_fail "missing END marker after regeneration"
+        return 1
+    fi
+    test_pass
+}
+
+test_context_idempotent_no_duplication() {
+    test_start "revo context - idempotent, no marker duplication"
+
+    setup_test_dir
+    echo "ctx-idem" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+
+    $REVO_CMD context > /dev/null 2>&1
+    $REVO_CMD context > /dev/null 2>&1
+    $REVO_CMD context > /dev/null 2>&1
+
+    local begin_count end_count
+    begin_count=$(grep -c "BEGIN revo:auto" CLAUDE.md)
+    end_count=$(grep -c "END revo:auto" CLAUDE.md)
+
+    if [[ "$begin_count" != "1" ]]; then
+        test_fail "expected 1 BEGIN marker, got $begin_count"
+        return 1
+    fi
+    if [[ "$end_count" != "1" ]]; then
+        test_fail "expected 1 END marker, got $end_count"
+        return 1
+    fi
+    test_pass
+}
+
 test_feature_creates_file() {
     test_start "revo feature - writes .revo/features file"
 
@@ -304,6 +432,10 @@ test_status_not_cloned
 test_tag_filtering
 test_mars_yaml_fallback
 test_context_generates_claude_md
+test_init_preserves_existing_claude_md
+test_init_preserves_existing_gitignore
+test_context_preserves_user_content
+test_context_idempotent_no_duplication
 test_feature_creates_file
 
 # Network tests (optional - skip if offline)

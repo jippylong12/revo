@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.4.0] - 2026-04-09
+
+### Fixed
+- `revo init`, `revo detect`, `revo context`, and `revo clone` no longer
+  clobber a pre-existing root-level `CLAUDE.md` or `.gitignore`. Previously,
+  running revo in a directory that already had user content would silently
+  overwrite both files.
+  - `.gitignore`: revo's required entries (`repos/`, `.revo/`) are now merged
+    into the existing file via a new `config_ensure_gitignore` helper. Only
+    missing entries are appended; existing entries are left untouched.
+  - `CLAUDE.md`: the auto-generated workspace context is now wrapped in
+    `<!-- BEGIN revo:auto -->` / `<!-- END revo:auto -->` HTML-comment
+    markers. On regeneration, only the marker block is replaced — content
+    above and below the markers is preserved verbatim. If the file has no
+    markers yet, the auto block is appended at the end with a separator.
+
+### Changed
+- `revo init` no longer double-writes `CLAUDE.md`. The onboarding placeholder
+  is only written when the workspace root has no `CLAUDE.md` at all; when
+  repos are detected, `cmd_context` handles the file directly with its
+  marker-based splice.
+
 ## [0.3.0] - 2026-04-09
 
 ### Added
