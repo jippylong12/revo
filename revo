@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# Revo CLI - Claude-first multi-repo workspace manager
+# https://github.com/marcus.salinas/revo
+# Fork of Mars (https://github.com/dean0x/mars) with Claude-first additions
+
+set -euo pipefail
+
+# Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
+trap 'exit 0' PIPE
+
+REVO_VERSION="0.2.0"
+
+# Determine script directory for sourcing libs
+REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source libraries (in development mode from lib/, in distribution they're bundled)
+if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
+    # Development mode - source from lib/
+    source "$REVO_SCRIPT_DIR/lib/ui.sh"
+    source "$REVO_SCRIPT_DIR/lib/yaml.sh"
+    source "$REVO_SCRIPT_DIR/lib/config.sh"
+    source "$REVO_SCRIPT_DIR/lib/git.sh"
+    source "$REVO_SCRIPT_DIR/lib/scan.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/init.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/clone.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/status.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/branch.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/checkout.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/sync.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/exec.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/add.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/list.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/context.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/feature.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/commit.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/push.sh"
+    source "$REVO_SCRIPT_DIR/lib/commands/pr.sh"
+fi
+# In bundled mode, all functions are already in this file
+
+# --- Help ---
+show_help() {
+    cat << EOF
+Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
+
+Usage: revo <command> [options]
+
+Workspace commands:
+  init                        Initialize a new workspace
+  add URL [--tags TAGS]       Add a repository to the workspace
+  clone [--tag TAG]           Clone configured repositories
+  list [--tag TAG]            List configured repositories
+  status [--tag TAG]          Show status of all repositories
+  sync [--tag TAG]            Pull latest changes on repositories
+  branch NAME [--tag TAG]     Create a branch on repositories
+  checkout BRANCH [--tag TAG] Checkout a branch on repositories
+  exec "CMD" [--tag TAG]      Run a command in each repository
+
+Claude-first commands:
+  context                     Scan repos and regenerate workspace CLAUDE.md
+  feature NAME [--tag TAG]    Create feature branch + context file across repos
+  commit MSG [--tag TAG]      Commit changes across dirty repos
+  push [--tag TAG]            Push branches across repositories
+  pr TITLE [--tag TAG]        Create coordinated PRs via gh CLI
+
+Options:
+  --tag TAG       Filter repositories by tag
+  --tags TAGS     Comma-separated list of tags (for add)
+  --force, -f     Force operation (clone, checkout)
+  --rebase, -r    Use rebase when syncing
+  --quiet, -q     Suppress command output (exec)
+  --body TEXT     PR body (pr)
+  --help, -h      Show this help
+  --version, -v   Show version
+
+Examples:
+  revo init
+  revo add git@github.com:org/shared-types.git --tags shared
+  revo add git@github.com:org/backend.git --tags backend,api
+  revo clone
+  revo context                                    # regenerate CLAUDE.md
+  revo feature clock-student --tag backend        # coordinated branch
+  revo commit "wire up clock endpoint"
+  revo push
+  revo pr "Clock endpoint for students" --tag backend
+
+Documentation: https://github.com/marcus.salinas/revo
+EOF
+}
+
+show_version() {
+    printf 'Revo v%s\n' "$REVO_VERSION"
+}
+
+# --- Main ---
+main() {
+    local command="${1:-}"
+
+    # Handle no arguments
+    if [[ -z "$command" ]]; then
+        show_help
+        return 0
+    fi
+
+    # Shift off the command
+    shift || true
+
+    case "$command" in
+        init)
+            cmd_init "$@"
+            ;;
+        clone)
+            cmd_clone "$@"
+            ;;
+        status)
+            cmd_status "$@"
+            ;;
+        branch)
+            cmd_branch "$@"
+            ;;
+        checkout)
+            cmd_checkout "$@"
+            ;;
+        sync)
+            cmd_sync "$@"
+            ;;
+        exec)
+            cmd_exec "$@"
+            ;;
+        add)
+            cmd_add "$@"
+            ;;
+        list)
+            cmd_list "$@"
+            ;;
+        context)
+            cmd_context "$@"
+            ;;
+        feature)
+            cmd_feature "$@"
+            ;;
+        commit)
+            cmd_commit "$@"
+            ;;
+        push)
+            cmd_push "$@"
+            ;;
+        pr)
+            cmd_pr "$@"
+            ;;
+        --help|-h|help)
+            show_help
+            ;;
+        --version|-v|version)
+            show_version
+            ;;
+        *)
+            printf 'Unknown command: %s\n\n' "$command" >&2
+            show_help >&2
+            return 1
+            ;;
+    esac
+}
+
+main "$@"

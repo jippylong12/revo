@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - sync command
+# Revo CLI - sync command
 # Pull latest changes across repositories
 
 cmd_sync() {
@@ -26,7 +26,7 @@ cmd_sync() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Sync Repositories"
+    ui_intro "Revo - Sync Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -47,7 +47,7 @@ cmd_sync() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"

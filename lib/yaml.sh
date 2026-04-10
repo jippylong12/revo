@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Mars CLI - Minimal YAML Parser
-# Parses mars.yaml format only - not a general YAML parser
+# Revo CLI - Minimal YAML Parser
+# Parses revo.yaml (and legacy mars.yaml) format only - not a general YAML parser
 # Compatible with bash 3.2+ (no associative arrays)
 
 # Global state - using parallel indexed arrays instead of associative arrays
@@ -13,6 +13,7 @@ YAML_REPO_COUNT=0
 YAML_REPO_URLS=()
 YAML_REPO_PATHS=()
 YAML_REPO_TAGS=()
+YAML_REPO_DEPS=()
 
 yaml_parse() {
     local file="$1"
@@ -28,6 +29,7 @@ yaml_parse() {
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -80,6 +82,7 @@ yaml_parse() {
                 YAML_REPO_URLS[$current_index]="$url"
                 YAML_REPO_PATHS[$current_index]=$(yaml_path_from_url "$url")
                 YAML_REPO_TAGS[$current_index]=""
+                YAML_REPO_DEPS[$current_index]=""
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
             fi
@@ -96,6 +99,13 @@ yaml_parse() {
                     tags_str="${tags_str//\"/}"
                     tags_str="${tags_str//\'/}"
                     YAML_REPO_TAGS[$current_index]="$tags_str"
+                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*\[([^\]]*)\]$ ]]; then
+                    # Parse inline array: [name1, name2]
+                    local deps_str="${BASH_REMATCH[1]}"
+                    deps_str="${deps_str//[[:space:]]/}"
+                    deps_str="${deps_str//\"/}"
+                    deps_str="${deps_str//\'/}"
+                    YAML_REPO_DEPS[$current_index]="$deps_str"
                 fi
             fi
         fi
@@ -165,8 +175,30 @@ yaml_get_tags() {
     printf '%s' "${YAML_REPO_TAGS[$idx]:-}"
 }
 
-# Write mars.yaml
-# Usage: yaml_write "path/to/mars.yaml"
+# Get repo depends_on list by index (comma-separated names)
+yaml_get_deps() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_DEPS[$idx]:-}"
+}
+
+# Find repo index by name (path basename)
+# Usage: idx=$(yaml_find_by_name "backend")
+# Returns: index or -1 if not found
+yaml_find_by_name() {
+    local name="$1"
+    local i
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        if [[ "${YAML_REPO_PATHS[$i]}" == "$name" ]]; then
+            printf '%d' "$i"
+            return 0
+        fi
+    done
+    printf '%d' -1
+    return 1
+}
+
+# Write revo.yaml
+# Usage: yaml_write "path/to/revo.yaml"
 yaml_write() {
     local file="$1"
     local i
@@ -181,6 +213,7 @@ yaml_write() {
             local url="${YAML_REPO_URLS[$i]}"
             local path="${YAML_REPO_PATHS[$i]}"
             local tags="${YAML_REPO_TAGS[$i]}"
+            local deps="${YAML_REPO_DEPS[$i]:-}"
 
             printf '  - url: %s\n' "$url"
 
@@ -195,6 +228,11 @@ yaml_write() {
             if [[ -n "$tags" ]]; then
                 printf '    tags: [%s]\n' "$tags"
             fi
+
+            # Write depends_on if present
+            if [[ -n "$deps" ]]; then
+                printf '    depends_on: [%s]\n' "$deps"
+            fi
         done
 
         printf '\ndefaults:\n'
@@ -203,11 +241,12 @@ yaml_write() {
 }
 
 # Add a repo to the config
-# Usage: yaml_add_repo "url" "path" "tags"
+# Usage: yaml_add_repo "url" "path" "tags" "deps"
 yaml_add_repo() {
     local url="$1"
     local path="${2:-}"
     local tags="${3:-}"
+    local deps="${4:-}"
 
     local idx=$YAML_REPO_COUNT
 
@@ -218,6 +257,7 @@ yaml_add_repo() {
     fi
     YAML_REPO_PATHS[$idx]="$path"
     YAML_REPO_TAGS[$idx]="$tags"
+    YAML_REPO_DEPS[$idx]="$deps"
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }

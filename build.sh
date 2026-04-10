@@ -1,28 +1,33 @@
 #!/usr/bin/env bash
-# Mars CLI - Build Script
+# Revo CLI - Build Script
 # Concatenates all source files into a single executable
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-OUTPUT_FILE="$SCRIPT_DIR/dist/mars"
+OUTPUT_FILE="$SCRIPT_DIR/dist/revo"
 
 # Create dist directory
 mkdir -p "$SCRIPT_DIR/dist"
 
+# Clean up any legacy binary from the Mars days
+if [[ -f "$SCRIPT_DIR/dist/mars" ]]; then
+    rm -f "$SCRIPT_DIR/dist/mars"
+fi
+
 # Start with header
 cat > "$OUTPUT_FILE" << 'HEADER'
 #!/usr/bin/env bash
-# Mars CLI - Multi Agentic Repo Workspace Manager
-# https://github.com/dean0x/mars
+# Revo CLI - Claude-first multi-repo workspace manager
+# https://github.com/marcus.salinas/revo
 # This is a bundled distribution - do not edit
 
 set -euo pipefail
 
-# Exit cleanly on SIGPIPE (e.g., mars clone | grep, mars status | head)
+# Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-MARS_VERSION="0.1.2"
+REVO_VERSION="0.2.0"
 
 HEADER
 
@@ -32,6 +37,7 @@ SOURCE_FILES=(
     "lib/yaml.sh"
     "lib/config.sh"
     "lib/git.sh"
+    "lib/scan.sh"
     "lib/commands/init.sh"
     "lib/commands/clone.sh"
     "lib/commands/status.sh"
@@ -41,6 +47,11 @@ SOURCE_FILES=(
     "lib/commands/exec.sh"
     "lib/commands/add.sh"
     "lib/commands/list.sh"
+    "lib/commands/context.sh"
+    "lib/commands/feature.sh"
+    "lib/commands/commit.sh"
+    "lib/commands/push.sh"
+    "lib/commands/pr.sh"
 )
 
 # Append each source file, stripping shebang and comments at start
@@ -62,10 +73,10 @@ done
 echo "" >> "$OUTPUT_FILE"
 echo "# === Main ===" >> "$OUTPUT_FILE"
 
-# Extract just the help and main functions from mars
+# Extract just the help and main functions from revo
 awk '
     /^# --- Help ---$/,0 { print }
-' "$SCRIPT_DIR/mars" >> "$OUTPUT_FILE"
+' "$SCRIPT_DIR/revo" >> "$OUTPUT_FILE"
 
 # Make executable
 chmod +x "$OUTPUT_FILE"

@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Integration tests for Mars CLI
+# Integration tests for Revo CLI
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MARS_CMD="$SCRIPT_DIR/../mars"
+REVO_CMD="bash $SCRIPT_DIR/../revo"
 ORIG_DIR="$PWD"
 
 # Test workspace directory
@@ -41,7 +41,7 @@ test_fail() {
 
 setup_test_dir() {
     cleanup
-    TEST_DIR="/tmp/mars/mars_integ_$$_$RANDOM"
+    TEST_DIR="/tmp/revo/revo_integ_$$_$RANDOM"
     mkdir -p "$TEST_DIR"
     cd "$TEST_DIR"
 }
@@ -49,11 +49,11 @@ setup_test_dir() {
 # --- Tests ---
 
 test_help() {
-    test_start "mars --help"
+    test_start "revo --help"
 
     local output
-    output=$("$MARS_CMD" --help 2>&1) || true
-    if echo "$output" | grep -q "Multi Agentic Repo Workspace Manager"; then
+    output=$($REVO_CMD --help 2>&1) || true
+    if echo "$output" | grep -q "Claude-first multi-repo workspace manager"; then
         test_pass
     else
         test_fail "help output missing expected text"
@@ -61,11 +61,11 @@ test_help() {
 }
 
 test_version() {
-    test_start "mars --version"
+    test_start "revo --version"
 
     local output
-    output=$("$MARS_CMD" --version 2>&1) || true
-    if echo "$output" | grep -q "^Mars v"; then
+    output=$($REVO_CMD --version 2>&1) || true
+    if echo "$output" | grep -q "^Revo v"; then
         test_pass
     else
         test_fail "version output format incorrect"
@@ -73,14 +73,14 @@ test_version() {
 }
 
 test_init_creates_files() {
-    test_start "mars init - creates expected files"
+    test_start "revo init - creates expected files"
 
     setup_test_dir
 
     # Run init with stdin to answer prompts
-    echo "test-workspace" | "$MARS_CMD" init > /dev/null 2>&1
+    echo "test-workspace" | $REVO_CMD init > /dev/null 2>&1
 
-    if [[ -f "mars.yaml" ]] && [[ -f ".gitignore" ]] && [[ -d "repos" ]]; then
+    if [[ -f "revo.yaml" ]] && [[ -f ".gitignore" ]] && [[ -d "repos" ]]; then
         test_pass
     else
         test_fail "missing expected files/directories"
@@ -88,30 +88,46 @@ test_init_creates_files() {
 }
 
 test_add_repo() {
-    test_start "mars add - adds repository to config"
+    test_start "revo add - adds repository to config"
 
     setup_test_dir
-    echo "add-test" | "$MARS_CMD" init > /dev/null 2>&1
+    echo "add-test" | $REVO_CMD init > /dev/null 2>&1
 
-    "$MARS_CMD" add "git@github.com:test/repo.git" --tags "test,demo" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/repo.git" --tags "test,demo" > /dev/null 2>&1
 
-    if grep -q "git@github.com:test/repo.git" mars.yaml; then
+    if grep -q "git@github.com:test/repo.git" revo.yaml; then
         test_pass
     else
-        test_fail "repo not found in mars.yaml"
+        test_fail "repo not found in revo.yaml"
+    fi
+}
+
+test_add_with_depends_on() {
+    test_start "revo add - depends_on flag"
+
+    setup_test_dir
+    echo "deps-test" | $REVO_CMD init > /dev/null 2>&1
+
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/backend.git" --depends-on "shared" > /dev/null 2>&1
+
+    if grep -q "depends_on: \[shared\]" revo.yaml; then
+        test_pass
+    else
+        test_fail "depends_on not persisted to revo.yaml"
     fi
 }
 
 test_list_repos() {
-    test_start "mars list - shows configured repos"
+    test_start "revo list - shows configured repos"
 
     setup_test_dir
-    echo "list-test" | "$MARS_CMD" init > /dev/null 2>&1
-    "$MARS_CMD" add "git@github.com:test/repo1.git" > /dev/null 2>&1
-    "$MARS_CMD" add "git@github.com:test/repo2.git" > /dev/null 2>&1
+    echo "list-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/repo1.git" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/repo2.git" > /dev/null 2>&1
 
     local output
-    output=$("$MARS_CMD" list 2>&1)
+    output=$($REVO_CMD list 2>&1)
 
     if echo "$output" | grep -q "repo1" && echo "$output" | grep -q "repo2"; then
         test_pass
@@ -121,14 +137,14 @@ test_list_repos() {
 }
 
 test_status_not_cloned() {
-    test_start "mars status - shows not cloned"
+    test_start "revo status - shows not cloned"
 
     setup_test_dir
-    echo "status-test" | "$MARS_CMD" init > /dev/null 2>&1
-    "$MARS_CMD" add "git@github.com:test/repo.git" > /dev/null 2>&1
+    echo "status-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/repo.git" > /dev/null 2>&1
 
     local output
-    output=$("$MARS_CMD" status 2>&1)
+    output=$($REVO_CMD status 2>&1)
 
     if echo "$output" | grep -q "not cloned"; then
         test_pass
@@ -137,16 +153,70 @@ test_status_not_cloned() {
     fi
 }
 
-test_clone_with_real_repo() {
-    test_start "mars clone - clones real repository"
+test_context_generates_claude_md() {
+    test_start "revo context - writes CLAUDE.md with dep order"
 
     setup_test_dir
-    echo "clone-test" | "$MARS_CMD" init > /dev/null 2>&1
+    echo "ctx-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/backend.git" --depends-on "shared" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/frontend.git" --depends-on "backend" > /dev/null 2>&1
+
+    $REVO_CMD context > /dev/null 2>&1
+
+    if [[ ! -f "CLAUDE.md" ]]; then
+        test_fail "CLAUDE.md not created"
+        return 1
+    fi
+
+    # Check for expected sections and order
+    if grep -q "## Repos" CLAUDE.md && grep -q "## Dependency Order" CLAUDE.md; then
+        # Verify shared comes before backend which comes before frontend
+        local shared_line backend_line frontend_line
+        shared_line=$(grep -n "1\. \*\*shared\*\*" CLAUDE.md | head -1 | cut -d: -f1)
+        backend_line=$(grep -n "2\. \*\*backend\*\*" CLAUDE.md | head -1 | cut -d: -f1)
+        frontend_line=$(grep -n "3\. \*\*frontend\*\*" CLAUDE.md | head -1 | cut -d: -f1)
+        if [[ -n "$shared_line" ]] && [[ -n "$backend_line" ]] && [[ -n "$frontend_line" ]]; then
+            test_pass
+        else
+            test_fail "dependency order incorrect in CLAUDE.md"
+        fi
+    else
+        test_fail "CLAUDE.md missing expected sections"
+    fi
+}
+
+test_feature_creates_file() {
+    test_start "revo feature - writes .revo/features file"
+
+    setup_test_dir
+    echo "feat-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/repo.git" > /dev/null 2>&1
+
+    # Will fail to create branch (not cloned) but should still write context file
+    $REVO_CMD feature my-feature > /dev/null 2>&1 || true
+
+    if [[ -f ".revo/features/my-feature.md" ]]; then
+        if grep -q "# Feature: my-feature" ".revo/features/my-feature.md"; then
+            test_pass
+        else
+            test_fail "feature file missing header"
+        fi
+    else
+        test_fail "feature file not created"
+    fi
+}
+
+test_clone_with_real_repo() {
+    test_start "revo clone - clones real repository"
+
+    setup_test_dir
+    echo "clone-test" | $REVO_CMD init > /dev/null 2>&1
 
     # Use a small, public repo for testing
-    "$MARS_CMD" add "https://github.com/octocat/Hello-World.git" > /dev/null 2>&1
+    $REVO_CMD add "https://github.com/octocat/Hello-World.git" > /dev/null 2>&1
 
-    if "$MARS_CMD" clone 2>&1 | grep -q "Cloned"; then
+    if $REVO_CMD clone 2>&1 | grep -q "Cloned"; then
         if [[ -d "repos/Hello-World/.git" ]]; then
             test_pass
         else
@@ -158,15 +228,15 @@ test_clone_with_real_repo() {
 }
 
 test_exec_command() {
-    test_start "mars exec - runs command in repos"
+    test_start "revo exec - runs command in repos"
 
     setup_test_dir
-    echo "exec-test" | "$MARS_CMD" init > /dev/null 2>&1
-    "$MARS_CMD" add "https://github.com/octocat/Hello-World.git" > /dev/null 2>&1
-    "$MARS_CMD" clone > /dev/null 2>&1
+    echo "exec-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "https://github.com/octocat/Hello-World.git" > /dev/null 2>&1
+    $REVO_CMD clone > /dev/null 2>&1
 
     local output
-    output=$("$MARS_CMD" exec "git log -1 --oneline" 2>&1)
+    output=$($REVO_CMD exec "git log -1 --oneline" 2>&1)
 
     if echo "$output" | grep -q "Success"; then
         test_pass
@@ -176,15 +246,15 @@ test_exec_command() {
 }
 
 test_tag_filtering() {
-    test_start "mars --tag filtering"
+    test_start "revo --tag filtering"
 
     setup_test_dir
-    echo "tag-test" | "$MARS_CMD" init > /dev/null 2>&1
-    "$MARS_CMD" add "git@github.com:test/frontend.git" --tags "frontend" > /dev/null 2>&1
-    "$MARS_CMD" add "git@github.com:test/backend.git" --tags "backend" > /dev/null 2>&1
+    echo "tag-test" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/frontend.git" --tags "frontend" > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/backend.git" --tags "backend" > /dev/null 2>&1
 
     local output
-    output=$("$MARS_CMD" list --tag frontend 2>&1)
+    output=$($REVO_CMD list --tag frontend 2>&1)
 
     if echo "$output" | grep -q "frontend" && ! echo "$output" | grep -q "backend"; then
         test_pass
@@ -193,18 +263,48 @@ test_tag_filtering() {
     fi
 }
 
+test_mars_yaml_fallback() {
+    test_start "revo finds mars.yaml fallback"
+
+    setup_test_dir
+    cat > mars.yaml << 'EOF'
+version: 1
+workspace:
+  name: legacy
+repos:
+  - url: git@github.com:test/legacy.git
+    tags: [legacy]
+defaults:
+  branch: main
+EOF
+    mkdir -p repos
+
+    local output
+    output=$($REVO_CMD list 2>&1)
+
+    if echo "$output" | grep -q "legacy"; then
+        test_pass
+    else
+        test_fail "did not fall back to mars.yaml"
+    fi
+}
+
 # --- Run tests ---
 
-printf "\n=== Mars CLI Integration Tests ===\n\n"
+printf "\n=== Revo CLI Integration Tests ===\n\n"
 
 # Basic tests (no network)
 test_help
 test_version
 test_init_creates_files
 test_add_repo
+test_add_with_depends_on
 test_list_repos
 test_status_not_cloned
 test_tag_filtering
+test_mars_yaml_fallback
+test_context_generates_claude_md
+test_feature_creates_file
 
 # Network tests (optional - skip if offline)
 if ping -c 1 github.com &> /dev/null; then

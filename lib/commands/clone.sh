@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - clone command
+# Revo CLI - clone command
 # Clone configured repositories with per-repo progress
 
 cmd_clone() {
@@ -26,7 +26,7 @@ cmd_clone() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Clone Repositories"
+    ui_intro "Revo - Clone Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -35,7 +35,7 @@ cmd_clone() {
         if [[ -n "$tag" ]]; then
             ui_step_error "No repositories found with tag: $tag"
         else
-            ui_step_error "No repositories configured. Run 'mars add <url>' first."
+            ui_step_error "No repositories configured. Run 'revo add <url>' first."
         fi
         ui_outro_cancel "Nothing to clone"
         return 1
@@ -62,7 +62,7 @@ cmd_clone() {
         url=$(yaml_get_url "$repo")
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         # Already cloned?
         if [[ -d "$full_path" ]] && [[ $force -eq 0 ]]; then
@@ -92,6 +92,11 @@ cmd_clone() {
             fail_count=$((fail_count + 1))
         fi
     done <<< "$repos"
+
+    # Auto-generate workspace CLAUDE.md on first successful clone
+    if [[ $fail_count -eq 0 ]] && [[ $success_count -gt 0 ]]; then
+        context_autogenerate_if_missing
+    fi
 
     # Summary
     ui_bar_line

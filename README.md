@@ -1,62 +1,89 @@
-# Mars
+# Revo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![npm](https://img.shields.io/npm/v/@dean0x/mars)](https://www.npmjs.com/package/@dean0x/mars)
-[![CI](https://github.com/dean0x/mars/actions/workflows/ci.yml/badge.svg)](https://github.com/dean0x/mars/actions/workflows/ci.yml)
-[![Website](https://img.shields.io/badge/Website-dean0x.github.io%2Fx%2Fmars-blue)](https://dean0x.github.io/x/mars/)
 
-Manage multiple Git repositories as one workspace.
+Claude-first multi-repo workspace manager.
 
-Tag-based filtering, parallel operations, zero dependencies.
+Revo is a fork of [Mars](https://github.com/dean0x/mars). It keeps everything
+Mars gives you — tag-based filtering, coordinated branches, zero dependencies —
+and adds features designed for working with coding agents:
 
-<p align="center">
-  <img src=".github/assets/demo.gif" alt="Mars CLI demo" width="800" />
-</p>
+- **`revo context`** scans your repos and writes a root-level `CLAUDE.md` so
+  Claude Code can understand the whole workspace at a glance.
+- **`revo feature <name>`** creates a coordinated branch and shared context
+  file across matching repos.
+- **`revo commit`**, **`revo push`**, **`revo pr`** let you commit, push, and
+  open PRs across the stack in one step.
+- **`depends_on`** in `revo.yaml` feeds a topological sort into the generated
+  CLAUDE.md so the agent knows what to change first.
 
-## Why Mars?
-
-Coding agents can take features end-to-end in one repo — but most real engineering spans many. Mars creates a workspace where all repos live under one tree, so agents inherit shared config and developers get coordinated operations across the stack.
-
-- **Workspace-level agent config** — config at the workspace root is inherited by every repo automatically
-- **Coordinated branches** — `mars branch feature-x --tag backend` across all relevant repos
-- **Tag-based filtering** — target subsets of repos (`--tag frontend`, `--tag backend`)
-- **Zero dependencies** — pure bash 3.2+, works on macOS out of the box
-
-## Quick Install
-
-```bash
-npm install -g @dean0x/mars
-```
-
-See [all installation methods](#installation) for Homebrew, curl, and manual options.
+Pure bash 3.2+, works on macOS out of the box, no runtime dependencies beyond
+`git` (and optionally `gh` for `revo pr`).
 
 ## Quick Start
 
 ```bash
 mkdir my-project && cd my-project
-mars init
+revo init
 
-mars add https://github.com/dean0x/mars-example-frontend.git --tags frontend,web
-mars add https://github.com/dean0x/mars-example-backend.git --tags backend,api
-mars add https://github.com/dean0x/mars-example-shared.git --tags shared
+revo add git@github.com:org/shared-types.git --tags shared
+revo add git@github.com:org/backend.git --tags backend,api --depends-on shared-types
+revo add git@github.com:org/frontend.git --tags frontend,web --depends-on backend
 
-mars clone
-mars status
+revo clone            # CLAUDE.md is auto-generated after first clone
+revo context          # regenerate it any time repos change
+```
+
+Then point Claude Code at the workspace directory and it will read `CLAUDE.md`
+on its own.
+
+## Claude Code Workflow
+
+```
+revo init
+  ↓
+revo add (repos, with --depends-on)
+  ↓
+revo clone                         ── auto-generates CLAUDE.md
+  ↓
+Claude Code reads CLAUDE.md
+  ↓
+revo feature clock-student         ── branch + .revo/features/clock-student.md
+  ↓
+Claude Code works across repos
+  ↓
+revo commit "wire up clock endpoint"
+  ↓
+revo push
+  ↓
+revo pr "Clock endpoint for students"    ── coordinated PRs via gh
 ```
 
 ## Commands
 
+### Workspace (from Mars)
+
 | Command | Description |
 |---------|-------------|
-| `mars init` | Initialize a new workspace |
-| `mars add <url> [--tags t1,t2]` | Add a repository to config |
-| `mars clone [--tag TAG]` | Clone configured repositories |
-| `mars status [--tag TAG]` | Show status of all repositories |
-| `mars branch <name> [--tag TAG]` | Create branch on repositories |
-| `mars checkout <branch> [--tag TAG]` | Checkout branch on repositories |
-| `mars sync [--tag TAG] [--rebase]` | Pull latest changes |
-| `mars exec "<cmd>" [--tag TAG]` | Run command in each repository |
-| `mars list [--tag TAG]` | List configured repositories |
+| `revo init` | Initialize a new workspace |
+| `revo add <url> [--tags t1,t2] [--depends-on r1,r2]` | Add a repository to config |
+| `revo clone [--tag TAG]` | Clone configured repositories |
+| `revo list [--tag TAG]` | List configured repositories |
+| `revo status [--tag TAG]` | Show status of all repositories |
+| `revo sync [--tag TAG] [--rebase]` | Pull latest changes |
+| `revo branch <name> [--tag TAG]` | Create branch on repositories |
+| `revo checkout <branch> [--tag TAG]` | Checkout branch on repositories |
+| `revo exec "<cmd>" [--tag TAG]` | Run command in each repository |
+
+### Claude-first (new in Revo)
+
+| Command | Description |
+|---------|-------------|
+| `revo context` | Scan repos and regenerate workspace `CLAUDE.md` |
+| `revo feature <name> [--tag TAG]` | Coordinated feature branch + `.revo/features/<name>.md` |
+| `revo commit <msg> [--tag TAG]` | Commit across dirty repos |
+| `revo push [--tag TAG]` | Push branches across repos |
+| `revo pr <title> [--tag TAG] [--body BODY]` | Create coordinated PRs via `gh` |
 
 ## Tag Filtering
 
@@ -64,18 +91,18 @@ Target subsets of repos using `--tag`:
 
 ```bash
 # Only clone frontend repos
-mars clone --tag frontend
+revo clone --tag frontend
 
-# Create branch on backend repos only
-mars branch feature-auth --tag backend
+# Create coordinated feature on backend repos only
+revo feature auth-overhaul --tag backend
 
 # Run npm install on all frontend repos
-mars exec "npm install" --tag frontend
+revo exec "npm install" --tag frontend
 ```
 
 ## Configuration
 
-### mars.yaml
+### revo.yaml
 
 ```yaml
 version: 1
@@ -84,72 +111,87 @@ workspace:
   name: "my-project"
 
 repos:
+  - url: git@github.com:org/shared-types.git
+    tags: [shared, types]
+
+  - url: git@github.com:org/backend.git
+    path: api                     # optional custom path
+    tags: [backend, api]
+    depends_on: [shared-types]    # optional — drives dep order in CLAUDE.md
+
   - url: git@github.com:org/frontend.git
     tags: [frontend, web]
-  - url: git@github.com:org/backend.git
-    path: api                    # optional custom path
-    tags: [backend, api]
+    depends_on: [backend]
 
 defaults:
   branch: main
 ```
 
+`depends_on` references repos by their path basename (the bit derived from
+the URL, or the explicit `path` if set).
+
+Migrating from Mars? `mars.yaml` is still honored as a fallback, so `revo`
+works in existing Mars workspaces without renaming anything.
+
 ## Workspace Structure
 
 ```
 my-project/
-├── mars.yaml           # Workspace configuration
-├── .gitignore          # Contains 'repos/'
+├── revo.yaml           # Workspace configuration
+├── CLAUDE.md           # Auto-generated by revo context
+├── .gitignore          # Contains 'repos/' and '.revo/'
+├── .revo/              # Revo-local state (gitignored)
+│   └── features/       # Feature context files
+│       ├── clock-student.md
+│       └── auth-overhaul.md
 └── repos/              # Cloned repositories (gitignored)
-    ├── frontend/
+    ├── shared-types/
     ├── backend/
-    └── shared/
+    └── frontend/
 ```
+
+## Why not...
+
+- **...a monorepo?** Because these repos are real, separately owned codebases
+  with their own CI, deploys, and histories. A monorepo forces a reorg Revo
+  doesn't need.
+- **...plain sibling directories?** Because you lose tag filtering, coordinated
+  branches, coordinated PRs, and — most importantly — a shared `CLAUDE.md`
+  that the agent can actually read.
+- **...a bespoke orchestrator?** Because Revo does nothing at runtime. It
+  doesn't build, deploy, or test. It just shapes the workspace.
 
 ## Installation
 
-### npm (recommended)
+### Manual (recommended while pre-release)
 
 ```bash
-npm install -g @dean0x/mars
-```
-
-Or run without installing:
-
-```bash
-npx @dean0x/mars --help
-```
-
-### Homebrew (macOS/Linux)
-
-```bash
-brew install dean0x/tap/mars
+git clone https://github.com/marcus.salinas/revo.git
+cd revo
+./build.sh
+cp dist/revo ~/.local/bin/  # or anywhere in PATH
 ```
 
 ### Shell Script
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dean0x/mars/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/marcus.salinas/revo/main/install.sh | bash
 ```
 
-Install a specific version:
+### npm
 
 ```bash
-MARS_VERSION=0.1.2 curl -fsSL https://raw.githubusercontent.com/dean0x/mars/main/install.sh | bash
-```
-
-### Manual
-
-```bash
-git clone https://github.com/dean0x/mars.git
-cd mars
-./build.sh
-cp dist/mars ~/.local/bin/  # or anywhere in PATH
+npm install -g revo-cli
 ```
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, and release process.
+
+## Credits
+
+Revo is a fork of [Mars](https://github.com/dean0x/mars) by [@dean0x](https://github.com/dean0x).
+The workspace layer is Mars's work; Revo adds the Claude-first commands on top.
 
 ## License
 

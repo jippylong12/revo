@@ -1,23 +1,30 @@
 #!/usr/bin/env bash
-# Mars CLI - Configuration Management
+# Revo CLI - Configuration Management
 # Handles workspace detection and config loading/saving
 
-MARS_WORKSPACE_ROOT=""
-MARS_CONFIG_FILE=""
-MARS_REPOS_DIR=""
+REVO_WORKSPACE_ROOT=""
+REVO_CONFIG_FILE=""
+REVO_REPOS_DIR=""
 
-# Find workspace root by searching upward for mars.yaml
+# Find workspace root by searching upward for revo.yaml (or mars.yaml as fallback)
 # Usage: config_find_root [start_dir]
-# Returns: 0 if found (sets MARS_WORKSPACE_ROOT), 1 if not found
+# Returns: 0 if found (sets REVO_WORKSPACE_ROOT), 1 if not found
 config_find_root() {
     local start_dir="${1:-$PWD}"
     local current="$start_dir"
 
     while [[ "$current" != "/" ]]; do
+        if [[ -f "$current/revo.yaml" ]]; then
+            REVO_WORKSPACE_ROOT="$current"
+            REVO_CONFIG_FILE="$current/revo.yaml"
+            REVO_REPOS_DIR="$current/repos"
+            return 0
+        fi
+        # Fallback: support mars.yaml for migration from Mars
         if [[ -f "$current/mars.yaml" ]]; then
-            MARS_WORKSPACE_ROOT="$current"
-            MARS_CONFIG_FILE="$current/mars.yaml"
-            MARS_REPOS_DIR="$current/repos"
+            REVO_WORKSPACE_ROOT="$current"
+            REVO_CONFIG_FILE="$current/mars.yaml"
+            REVO_REPOS_DIR="$current/repos"
             return 0
         fi
         current="$(dirname "$current")"
@@ -33,13 +40,13 @@ config_init() {
     local workspace_name="$1"
     local dir="${2:-$PWD}"
 
-    if [[ -f "$dir/mars.yaml" ]]; then
+    if [[ -f "$dir/revo.yaml" ]] || [[ -f "$dir/mars.yaml" ]]; then
         return 1
     fi
 
-    MARS_WORKSPACE_ROOT="$dir"
-    MARS_CONFIG_FILE="$dir/mars.yaml"
-    MARS_REPOS_DIR="$dir/repos"
+    REVO_WORKSPACE_ROOT="$dir"
+    REVO_CONFIG_FILE="$dir/revo.yaml"
+    REVO_REPOS_DIR="$dir/repos"
 
     # Set workspace name for yaml module
     YAML_WORKSPACE_NAME="$workspace_name"
@@ -48,15 +55,16 @@ config_init() {
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
 
     # Create directory structure
-    mkdir -p "$MARS_REPOS_DIR"
+    mkdir -p "$REVO_REPOS_DIR"
 
     # Write config
-    yaml_write "$MARS_CONFIG_FILE"
+    yaml_write "$REVO_CONFIG_FILE"
 
     # Create .gitignore
-    printf 'repos/\n' > "$dir/.gitignore"
+    printf 'repos/\n.revo/\n' > "$dir/.gitignore"
 
     return 0
 }
@@ -65,21 +73,21 @@ config_init() {
 # Usage: config_load
 # Returns: 0 on success, 1 on failure
 config_load() {
-    if [[ -z "$MARS_CONFIG_FILE" ]] || [[ ! -f "$MARS_CONFIG_FILE" ]]; then
+    if [[ -z "$REVO_CONFIG_FILE" ]] || [[ ! -f "$REVO_CONFIG_FILE" ]]; then
         return 1
     fi
 
-    yaml_parse "$MARS_CONFIG_FILE"
+    yaml_parse "$REVO_CONFIG_FILE"
 }
 
 # Save configuration
 # Usage: config_save
 config_save() {
-    if [[ -z "$MARS_CONFIG_FILE" ]]; then
+    if [[ -z "$REVO_CONFIG_FILE" ]]; then
         return 1
     fi
 
-    yaml_write "$MARS_CONFIG_FILE"
+    yaml_write "$REVO_CONFIG_FILE"
 }
 
 # Get repos (optionally filtered by tag)
@@ -110,7 +118,7 @@ config_repo_exists() {
     local idx="$1"
     local path
     path=$(yaml_get_path "$idx")
-    [[ -d "$MARS_REPOS_DIR/$path" ]]
+    [[ -d "$REVO_REPOS_DIR/$path" ]]
 }
 
 # Get full path to repo
@@ -119,7 +127,7 @@ config_repo_full_path() {
     local idx="$1"
     local path
     path=$(yaml_get_path "$idx")
-    printf '%s/%s' "$MARS_REPOS_DIR" "$path"
+    printf '%s/%s' "$REVO_REPOS_DIR" "$path"
 }
 
 # Require workspace context
@@ -127,7 +135,7 @@ config_repo_full_path() {
 # Prints error and returns 1 if not in workspace
 config_require_workspace() {
     if ! config_find_root; then
-        printf 'Error: Not in a Mars workspace. Run "mars init" first.\n' >&2
+        printf 'Error: Not in a Revo workspace. Run "revo init" first.\n' >&2
         return 1
     fi
     config_load
@@ -137,7 +145,7 @@ config_require_workspace() {
 # Usage: if config_is_in_workspace "/some/path"; then ...
 config_is_in_workspace() {
     local path="$1"
-    [[ "$path" == "$MARS_WORKSPACE_ROOT"* ]]
+    [[ "$path" == "$REVO_WORKSPACE_ROOT"* ]]
 }
 
 # Get workspace name

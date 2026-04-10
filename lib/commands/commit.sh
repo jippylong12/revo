@@ -1,35 +1,29 @@
 #!/usr/bin/env bash
-# Revo CLI - exec command
-# Run command in each repository
+# Revo CLI - commit command
+# Commit across dirty repos with the same message.
 
-cmd_exec() {
-    local command=""
+cmd_commit() {
+    local message=""
     local tag=""
-    local quiet=0
 
-    # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --tag)
                 tag="$2"
                 shift 2
                 ;;
-            --quiet|-q)
-                quiet=1
-                shift
-                ;;
-            --)
-                shift
-                command="$*"
-                break
+            --help|-h)
+                printf 'Usage: revo commit <message> [--tag TAG]\n\n'
+                printf 'Stages and commits changes across dirty repos with the same message.\n'
+                return 0
                 ;;
             -*)
                 ui_step_error "Unknown option: $1"
                 return 1
                 ;;
             *)
-                if [[ -z "$command" ]]; then
-                    command="$1"
+                if [[ -z "$message" ]]; then
+                    message="$1"
                 else
                     ui_step_error "Unexpected argument: $1"
                     return 1
@@ -39,21 +33,21 @@ cmd_exec() {
         esac
     done
 
-    if [[ -z "$command" ]]; then
-        ui_step_error "Usage: revo exec \"<command>\" [--tag TAG]"
+    if [[ -z "$message" ]]; then
+        ui_step_error "Usage: revo commit <message> [--tag TAG]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Revo - Execute: $command"
+    ui_intro "Revo - Commit: $message"
 
     local repos
     repos=$(config_get_repos "$tag")
 
     if [[ -z "$repos" ]]; then
         ui_step_error "No repositories configured"
-        ui_outro_cancel "Nothing to do"
+        ui_outro_cancel "Nothing to commit"
         return 1
     fi
 
@@ -74,43 +68,37 @@ cmd_exec() {
             continue
         fi
 
-        ui_step "Running in: $path"
-        ui_bar_line
-
-        # Execute command in repo directory
-        local output
-        local exit_code
-
-        if output=$(cd "$full_path" && eval "$command" 2>&1); then
-            exit_code=0
-        else
-            exit_code=$?
+        if ! git_is_dirty "$full_path"; then
+            ui_step_done "Clean (skipped):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
         fi
 
-        # Show output if not quiet
-        if [[ $quiet -eq 0 ]] && [[ -n "$output" ]]; then
-            while IFS= read -r line; do
-                printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "$line")"
-            done <<< "$output"
+        # Stage
+        if ! git_exec "$full_path" add -A; then
+            ui_step_error "Failed to stage: $path - $GIT_ERROR"
+            fail_count=$((fail_count + 1))
+            continue
         fi
 
-        if [[ $exit_code -eq 0 ]]; then
-            ui_step_done "Success:" "$path"
+        # Commit
+        if git_exec "$full_path" commit -m "$message"; then
+            ui_step_done "Committed:" "$path"
             success_count=$((success_count + 1))
         else
-            ui_step_error "Failed (exit $exit_code): $path"
+            ui_step_error "Failed: $path - $GIT_ERROR"
             fail_count=$((fail_count + 1))
         fi
-
-        ui_bar_line
     done <<< "$repos"
 
+    ui_bar_line
+
     if [[ $fail_count -eq 0 ]]; then
-        local msg="Executed on $success_count repo(s)"
+        local msg="Committed on $success_count repo(s)"
         [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
         ui_outro "$msg"
     else
-        ui_outro_cancel "$success_count succeeded, $fail_count failed"
+        ui_outro_cancel "$success_count committed, $fail_count failed"
         return 1
     fi
 

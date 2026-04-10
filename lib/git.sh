@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - Git Operations
+# Revo CLI - Git Operations
 # Wrapper functions for git commands with consistent error handling
 
 # Result pattern: functions return 0 on success, non-zero on failure

@@ -59,7 +59,7 @@ test_path_from_url() {
 test_parse_simple() {
     test_start "yaml_parse - simple config"
 
-    local test_file="/tmp/mars/mars_test_$$.yaml"
+    local test_file="/tmp/revo/revo_test_$$.yaml"
     cat > "$test_file" << 'EOF'
 version: 1
 
@@ -99,7 +99,7 @@ EOF
 test_get_repos_filter() {
     test_start "yaml_get_repos - filter by tag"
 
-    local test_file="/tmp/mars/mars_test_$$.yaml"
+    local test_file="/tmp/revo/revo_test_$$.yaml"
     cat > "$test_file" << 'EOF'
 version: 1
 workspace:
@@ -149,8 +149,9 @@ test_write_yaml() {
     YAML_REPO_URLS=("git@github.com:test/repo.git")
     YAML_REPO_PATHS=("repo")
     YAML_REPO_TAGS=("test,demo")
+    YAML_REPO_DEPS=("")
 
-    local test_file="/tmp/mars/mars_test_$$.yaml"
+    local test_file="/tmp/revo/revo_test_$$.yaml"
     yaml_write "$test_file"
 
     # Parse it back
@@ -171,6 +172,7 @@ test_add_repo() {
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
 
     yaml_add_repo "git@github.com:org/newrepo.git" "" "newtag"
 
@@ -178,6 +180,78 @@ test_add_repo() {
     assert_eq "newrepo" "${YAML_REPO_PATHS[0]}" || return 1
     assert_eq "newtag" "${YAML_REPO_TAGS[0]}" || return 1
 
+    test_pass
+}
+
+test_depends_on_parse() {
+    test_start "yaml_parse - depends_on"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: deps-test
+repos:
+  - url: git@github.com:org/shared-types.git
+    tags: [shared]
+  - url: git@github.com:org/backend.git
+    tags: [backend]
+    depends_on: [shared-types]
+  - url: git@github.com:org/frontend.git
+    tags: [frontend]
+    depends_on: [backend, shared-types]
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "3" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    assert_eq "" "${YAML_REPO_DEPS[0]}" || { rm "$test_file"; return 1; }
+    assert_eq "shared-types" "${YAML_REPO_DEPS[1]}" || { rm "$test_file"; return 1; }
+    assert_eq "backend,shared-types" "${YAML_REPO_DEPS[2]}" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_find_by_name() {
+    test_start "yaml_find_by_name"
+
+    YAML_REPO_COUNT=3
+    YAML_REPO_URLS=("u1" "u2" "u3")
+    YAML_REPO_PATHS=("alpha" "beta" "gamma")
+    YAML_REPO_TAGS=("" "" "")
+    YAML_REPO_DEPS=("" "" "")
+
+    local idx
+    idx=$(yaml_find_by_name "beta")
+    assert_eq "1" "$idx" || return 1
+    idx=$(yaml_find_by_name "missing") || true
+    assert_eq "-1" "$idx" || return 1
+
+    test_pass
+}
+
+test_depends_on_roundtrip() {
+    test_start "yaml_write - depends_on roundtrip"
+
+    YAML_WORKSPACE_NAME="rt"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=2
+    YAML_REPO_URLS=("git@github.com:o/a.git" "git@github.com:o/b.git")
+    YAML_REPO_PATHS=("a" "b")
+    YAML_REPO_TAGS=("" "")
+    YAML_REPO_DEPS=("" "a")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq "2" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    assert_eq "a" "${YAML_REPO_DEPS[1]}" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
     test_pass
 }
 
@@ -190,6 +264,9 @@ test_parse_simple
 test_get_repos_filter
 test_write_yaml
 test_add_repo
+test_depends_on_parse
+test_find_by_name
+test_depends_on_roundtrip
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

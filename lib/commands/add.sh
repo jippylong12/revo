@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Mars CLI - add command
+# Revo CLI - add command
 # Add a repository to the workspace configuration
 
 cmd_add() {
     local url=""
     local path=""
     local tags=""
+    local deps=""
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -16,6 +17,10 @@ cmd_add() {
                 ;;
             --path)
                 path="$2"
+                shift 2
+                ;;
+            --depends-on)
+                deps="$2"
                 shift 2
                 ;;
             -*)
@@ -35,7 +40,7 @@ cmd_add() {
     done
 
     if [[ -z "$url" ]]; then
-        ui_step_error "Usage: mars add <url> [--tags tag1,tag2] [--path custom-path]"
+        ui_step_error "Usage: revo add <url> [--tags tag1,tag2] [--path custom-path] [--depends-on repo1,repo2]"
         return 1
     fi
 
@@ -64,10 +69,10 @@ cmd_add() {
         fi
     done
 
-    ui_intro "Mars - Add Repository"
+    ui_intro "Revo - Add Repository"
 
     # Add to config
-    yaml_add_repo "$url" "$path" "$tags"
+    yaml_add_repo "$url" "$path" "$tags" "$deps"
 
     # Save config
     config_save
@@ -78,8 +83,12 @@ cmd_add() {
         ui_info "Tags: $tags"
     fi
 
+    if [[ -n "$deps" ]]; then
+        ui_info "Depends on: $deps"
+    fi
+
     ui_bar_line
-    ui_info "$(ui_dim "Run 'mars clone' to clone the repository")"
+    ui_info "$(ui_dim "Run 'revo clone' to clone the repository")"
 
     ui_outro "Repository added to workspace"
 

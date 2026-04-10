@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Mars CLI - Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/dean0x/mars/main/install.sh | bash
-# Override version: MARS_VERSION=0.1.1 curl -fsSL ... | bash
+# Revo CLI - Installer
+# Usage: curl -fsSL https://raw.githubusercontent.com/marcus.salinas/revo/main/install.sh | bash
+# Override version: REVO_VERSION=0.2.0 curl -fsSL ... | bash
 
 set -euo pipefail
 
 # Configuration
-MARS_VERSION="${MARS_VERSION:-latest}"
-MARS_INSTALL_DIR="${MARS_INSTALL_DIR:-$HOME/.mars}"
-MARS_BIN_DIR="$MARS_INSTALL_DIR/bin"
-MARS_REPO="dean0x/mars"
+REVO_VERSION="${REVO_VERSION:-latest}"
+REVO_INSTALL_DIR="${REVO_INSTALL_DIR:-$HOME/.revo}"
+REVO_BIN_DIR="$REVO_INSTALL_DIR/bin"
+REVO_REPO="marcus.salinas/revo"
 
 # Colors (if terminal supports it)
 if [[ -t 1 ]] && [[ "${TERM:-}" != "dumb" ]]; then
@@ -100,27 +100,27 @@ download() {
 
 # Build download URL based on version
 get_download_url() {
-    if [[ "$MARS_VERSION" == "latest" ]]; then
-        echo "https://github.com/$MARS_REPO/releases/latest/download/mars"
+    if [[ "$REVO_VERSION" == "latest" ]]; then
+        echo "https://github.com/$REVO_REPO/releases/latest/download/revo"
     else
-        echo "https://github.com/$MARS_REPO/releases/download/v$MARS_VERSION/mars"
+        echo "https://github.com/$REVO_REPO/releases/download/v$REVO_VERSION/revo"
     fi
 }
 
 # Add to PATH in shell config
 add_to_path() {
     local rc_file="$1"
-    local path_line="export PATH=\"\$PATH:$MARS_BIN_DIR\""
+    local path_line="export PATH=\"\$PATH:$REVO_BIN_DIR\""
 
     # Check if already added
-    if [[ -f "$rc_file" ]] && grep -qF "$MARS_BIN_DIR" "$rc_file"; then
+    if [[ -f "$rc_file" ]] && grep -qF "$REVO_BIN_DIR" "$rc_file"; then
         return 0
     fi
 
     # Add to rc file
     {
         echo ""
-        echo "# Mars CLI"
+        echo "# Revo CLI"
         echo "$path_line"
     } >> "$rc_file"
 
@@ -130,7 +130,7 @@ add_to_path() {
 # Main installation
 main() {
     printf "\n"
-    printf "${CYAN}┌${RESET}  Mars - Multi Agentic Repo Workspace Manager Installer\n"
+    printf "${CYAN}┌${RESET}  Revo - Claude-first Multi-Repo Workspace Manager Installer\n"
     printf "${DIM}│${RESET}\n"
 
     # Check requirements
@@ -140,32 +140,32 @@ main() {
 
     # Create directories
     info "Creating installation directory..."
-    mkdir -p "$MARS_BIN_DIR"
-    success "Created $MARS_BIN_DIR"
+    mkdir -p "$REVO_BIN_DIR"
+    success "Created $REVO_BIN_DIR"
 
-    # Download mars
-    local mars_path="$MARS_BIN_DIR/mars"
+    # Download revo
+    local revo_path="$REVO_BIN_DIR/revo"
     local release_url
     release_url="$(get_download_url)"
 
-    if [[ "$MARS_VERSION" == "latest" ]]; then
-        info "Downloading Mars CLI (latest release)..."
+    if [[ "$REVO_VERSION" == "latest" ]]; then
+        info "Downloading Revo CLI (latest release)..."
     else
-        info "Downloading Mars CLI v${MARS_VERSION}..."
+        info "Downloading Revo CLI v${REVO_VERSION}..."
     fi
 
-    if download "$release_url" "$mars_path"; then
-        chmod +x "$mars_path"
-        success "Downloaded mars executable"
+    if download "$release_url" "$revo_path"; then
+        chmod +x "$revo_path"
+        success "Downloaded revo executable"
     else
         # Fallback to raw.githubusercontent.com
-        local fallback_url="https://raw.githubusercontent.com/$MARS_REPO/main/dist/mars"
+        local fallback_url="https://raw.githubusercontent.com/$REVO_REPO/main/dist/revo"
         warn "Release download failed, trying fallback..."
-        if download "$fallback_url" "$mars_path"; then
-            chmod +x "$mars_path"
+        if download "$fallback_url" "$revo_path"; then
+            chmod +x "$revo_path"
             warn "Downloaded from fallback (unversioned). Consider installing a tagged release."
         else
-            error "Failed to download Mars CLI"
+            error "Failed to download Revo CLI"
             error "Tried: $release_url"
             error "Fallback: $fallback_url"
             exit 1
@@ -182,16 +182,16 @@ main() {
     else
         warn "Could not add to PATH automatically"
         warn "Add this to your shell config:"
-        printf '  export PATH="$PATH:%s"\n' "$MARS_BIN_DIR"
+        printf '  export PATH="$PATH:%s"\n' "$REVO_BIN_DIR"
     fi
 
     # Verify installation
     printf "${DIM}│${RESET}\n"
     local installed_version
-    if installed_version=$("$mars_path" --version 2>/dev/null); then
+    if installed_version=$("$revo_path" --version 2>/dev/null); then
         success "Installed $installed_version"
     else
-        warn "Installation may have issues - please check $mars_path"
+        warn "Installation may have issues - please check $revo_path"
     fi
 
     # Done
@@ -200,9 +200,9 @@ main() {
     printf "\n"
     printf "  To get started:\n"
     printf "    1. Restart your shell or run: ${CYAN}source %s${RESET}\n" "$rc_file"
-    printf "    2. Create a workspace: ${CYAN}mars init${RESET}\n"
+    printf "    2. Create a workspace: ${CYAN}revo init${RESET}\n"
     printf "\n"
-    printf "  Documentation: https://github.com/%s\n" "$MARS_REPO"
+    printf "  Documentation: https://github.com/%s\n" "$REVO_REPO"
     printf "\n"
 }
 

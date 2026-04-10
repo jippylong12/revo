@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - checkout command
+# Revo CLI - checkout command
 # Checkout a branch across repositories
 
 cmd_checkout() {
@@ -35,13 +35,13 @@ cmd_checkout() {
     done
 
     if [[ -z "$branch_name" ]]; then
-        ui_step_error "Usage: mars checkout <branch-name> [--tag TAG] [--force]"
+        ui_step_error "Usage: revo checkout <branch-name> [--tag TAG] [--force]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Checkout Branch: $branch_name"
+    ui_intro "Revo - Checkout Branch: $branch_name"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -62,7 +62,7 @@ cmd_checkout() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"

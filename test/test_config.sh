@@ -64,20 +64,26 @@ assert_dir_exists() {
 test_config_init() {
     test_start "config_init - creates workspace"
 
-    local test_dir="/tmp/mars/mars_test_$$"
+    local test_dir="/tmp/revo/revo_test_$$"
     local orig_dir="$PWD"
     mkdir -p "$test_dir"
     cd "$test_dir"
 
     config_init "test-workspace" "$test_dir"
 
-    assert_file_exists "$test_dir/mars.yaml" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+    assert_file_exists "$test_dir/revo.yaml" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
     assert_file_exists "$test_dir/.gitignore" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
     assert_dir_exists "$test_dir/repos" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
 
     # Check .gitignore content
     if ! grep -q "repos/" "$test_dir/.gitignore"; then
         test_fail ".gitignore doesn't contain repos/"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+    if ! grep -q ".revo/" "$test_dir/.gitignore"; then
+        test_fail ".gitignore doesn't contain .revo/"
         cd "$orig_dir"
         rm -rf "$test_dir"
         return 1
@@ -89,25 +95,50 @@ test_config_init() {
 }
 
 test_config_find_root() {
-    test_start "config_find_root - finds mars.yaml upward"
+    test_start "config_find_root - finds revo.yaml upward"
 
-    local test_dir="/tmp/mars/mars_test_$$"
+    local test_dir="/tmp/revo/revo_test_$$"
     local orig_dir="$PWD"
     mkdir -p "$test_dir/repos/subrepo/deep"
 
-    # Create mars.yaml at root
-    echo "version: 1" > "$test_dir/mars.yaml"
+    # Create revo.yaml at root
+    echo "version: 1" > "$test_dir/revo.yaml"
 
     # Search from deep directory
     cd "$test_dir/repos/subrepo/deep"
 
     if config_find_root; then
-        assert_eq "$test_dir" "$MARS_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
         cd "$orig_dir"
         rm -rf "$test_dir"
         test_pass
     else
-        test_fail "config_find_root should have found mars.yaml"
+        test_fail "config_find_root should have found revo.yaml"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+}
+
+test_config_find_root_mars_fallback() {
+    test_start "config_find_root - falls back to mars.yaml"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    local orig_dir="$PWD"
+    mkdir -p "$test_dir/repos/deep"
+
+    echo "version: 1" > "$test_dir/mars.yaml"
+
+    cd "$test_dir/repos/deep"
+
+    if config_find_root; then
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir/mars.yaml" "$REVO_CONFIG_FILE" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        test_pass
+    else
+        test_fail "config_find_root should have fallen back to mars.yaml"
         cd "$orig_dir"
         rm -rf "$test_dir"
         return 1
@@ -117,10 +148,10 @@ test_config_find_root() {
 test_config_repo_count() {
     test_start "config_repo_count"
 
-    local test_dir="/tmp/mars/mars_test_$$"
+    local test_dir="/tmp/revo/revo_test_$$"
     mkdir -p "$test_dir"
 
-    cat > "$test_dir/mars.yaml" << 'EOF'
+    cat > "$test_dir/revo.yaml" << 'EOF'
 version: 1
 workspace:
   name: test
@@ -135,7 +166,7 @@ defaults:
   branch: main
 EOF
 
-    MARS_CONFIG_FILE="$test_dir/mars.yaml"
+    REVO_CONFIG_FILE="$test_dir/revo.yaml"
     config_load
 
     local total
@@ -156,6 +187,7 @@ printf "\n=== Config Tests ===\n\n"
 
 test_config_init
 test_config_find_root
+test_config_find_root_mars_fallback
 test_config_repo_count
 
 printf "\n=== Results ===\n"

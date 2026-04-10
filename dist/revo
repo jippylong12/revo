@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# Mars CLI - Multi Agentic Repo Workspace Manager
-# https://github.com/dean0x/mars
+# Revo CLI - Claude-first multi-repo workspace manager
+# https://github.com/marcus.salinas/revo
 # This is a bundled distribution - do not edit
 
 set -euo pipefail
 
-# Exit cleanly on SIGPIPE (e.g., mars clone | grep, mars status | head)
+# Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-MARS_VERSION="0.1.2"
+REVO_VERSION="0.2.0"
 
 
 # === lib/ui.sh ===
-# Mars CLI - UI Components (Clack-style)
+# Revo CLI - UI Components (Clack-style)
 # Provides terminal UI primitives with Unicode/ASCII fallback
 
 # Detect color support
@@ -466,8 +466,8 @@ ui_cursor_show() {
 trap 'ui_cursor_show' EXIT
 
 # === lib/yaml.sh ===
-# Mars CLI - Minimal YAML Parser
-# Parses mars.yaml format only - not a general YAML parser
+# Revo CLI - Minimal YAML Parser
+# Parses revo.yaml (and legacy mars.yaml) format only - not a general YAML parser
 # Compatible with bash 3.2+ (no associative arrays)
 
 # Global state - using parallel indexed arrays instead of associative arrays
@@ -480,6 +480,7 @@ YAML_REPO_COUNT=0
 YAML_REPO_URLS=()
 YAML_REPO_PATHS=()
 YAML_REPO_TAGS=()
+YAML_REPO_DEPS=()
 
 yaml_parse() {
     local file="$1"
@@ -495,6 +496,7 @@ yaml_parse() {
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -547,6 +549,7 @@ yaml_parse() {
                 YAML_REPO_URLS[$current_index]="$url"
                 YAML_REPO_PATHS[$current_index]=$(yaml_path_from_url "$url")
                 YAML_REPO_TAGS[$current_index]=""
+                YAML_REPO_DEPS[$current_index]=""
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
             fi
@@ -563,6 +566,13 @@ yaml_parse() {
                     tags_str="${tags_str//\"/}"
                     tags_str="${tags_str//\'/}"
                     YAML_REPO_TAGS[$current_index]="$tags_str"
+                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*\[([^\]]*)\]$ ]]; then
+                    # Parse inline array: [name1, name2]
+                    local deps_str="${BASH_REMATCH[1]}"
+                    deps_str="${deps_str//[[:space:]]/}"
+                    deps_str="${deps_str//\"/}"
+                    deps_str="${deps_str//\'/}"
+                    YAML_REPO_DEPS[$current_index]="$deps_str"
                 fi
             fi
         fi
@@ -632,8 +642,30 @@ yaml_get_tags() {
     printf '%s' "${YAML_REPO_TAGS[$idx]:-}"
 }
 
-# Write mars.yaml
-# Usage: yaml_write "path/to/mars.yaml"
+# Get repo depends_on list by index (comma-separated names)
+yaml_get_deps() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_DEPS[$idx]:-}"
+}
+
+# Find repo index by name (path basename)
+# Usage: idx=$(yaml_find_by_name "backend")
+# Returns: index or -1 if not found
+yaml_find_by_name() {
+    local name="$1"
+    local i
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        if [[ "${YAML_REPO_PATHS[$i]}" == "$name" ]]; then
+            printf '%d' "$i"
+            return 0
+        fi
+    done
+    printf '%d' -1
+    return 1
+}
+
+# Write revo.yaml
+# Usage: yaml_write "path/to/revo.yaml"
 yaml_write() {
     local file="$1"
     local i
@@ -648,6 +680,7 @@ yaml_write() {
             local url="${YAML_REPO_URLS[$i]}"
             local path="${YAML_REPO_PATHS[$i]}"
             local tags="${YAML_REPO_TAGS[$i]}"
+            local deps="${YAML_REPO_DEPS[$i]:-}"
 
             printf '  - url: %s\n' "$url"
 
@@ -662,6 +695,11 @@ yaml_write() {
             if [[ -n "$tags" ]]; then
                 printf '    tags: [%s]\n' "$tags"
             fi
+
+            # Write depends_on if present
+            if [[ -n "$deps" ]]; then
+                printf '    depends_on: [%s]\n' "$deps"
+            fi
         done
 
         printf '\ndefaults:\n'
@@ -670,11 +708,12 @@ yaml_write() {
 }
 
 # Add a repo to the config
-# Usage: yaml_add_repo "url" "path" "tags"
+# Usage: yaml_add_repo "url" "path" "tags" "deps"
 yaml_add_repo() {
     local url="$1"
     local path="${2:-}"
     local tags="${3:-}"
+    local deps="${4:-}"
 
     local idx=$YAML_REPO_COUNT
 
@@ -685,30 +724,38 @@ yaml_add_repo() {
     fi
     YAML_REPO_PATHS[$idx]="$path"
     YAML_REPO_TAGS[$idx]="$tags"
+    YAML_REPO_DEPS[$idx]="$deps"
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }
 
 # === lib/config.sh ===
-# Mars CLI - Configuration Management
+# Revo CLI - Configuration Management
 # Handles workspace detection and config loading/saving
 
-MARS_WORKSPACE_ROOT=""
-MARS_CONFIG_FILE=""
-MARS_REPOS_DIR=""
+REVO_WORKSPACE_ROOT=""
+REVO_CONFIG_FILE=""
+REVO_REPOS_DIR=""
 
-# Find workspace root by searching upward for mars.yaml
+# Find workspace root by searching upward for revo.yaml (or mars.yaml as fallback)
 # Usage: config_find_root [start_dir]
-# Returns: 0 if found (sets MARS_WORKSPACE_ROOT), 1 if not found
+# Returns: 0 if found (sets REVO_WORKSPACE_ROOT), 1 if not found
 config_find_root() {
     local start_dir="${1:-$PWD}"
     local current="$start_dir"
 
     while [[ "$current" != "/" ]]; do
+        if [[ -f "$current/revo.yaml" ]]; then
+            REVO_WORKSPACE_ROOT="$current"
+            REVO_CONFIG_FILE="$current/revo.yaml"
+            REVO_REPOS_DIR="$current/repos"
+            return 0
+        fi
+        # Fallback: support mars.yaml for migration from Mars
         if [[ -f "$current/mars.yaml" ]]; then
-            MARS_WORKSPACE_ROOT="$current"
-            MARS_CONFIG_FILE="$current/mars.yaml"
-            MARS_REPOS_DIR="$current/repos"
+            REVO_WORKSPACE_ROOT="$current"
+            REVO_CONFIG_FILE="$current/mars.yaml"
+            REVO_REPOS_DIR="$current/repos"
             return 0
         fi
         current="$(dirname "$current")"
@@ -724,13 +771,13 @@ config_init() {
     local workspace_name="$1"
     local dir="${2:-$PWD}"
 
-    if [[ -f "$dir/mars.yaml" ]]; then
+    if [[ -f "$dir/revo.yaml" ]] || [[ -f "$dir/mars.yaml" ]]; then
         return 1
     fi
 
-    MARS_WORKSPACE_ROOT="$dir"
-    MARS_CONFIG_FILE="$dir/mars.yaml"
-    MARS_REPOS_DIR="$dir/repos"
+    REVO_WORKSPACE_ROOT="$dir"
+    REVO_CONFIG_FILE="$dir/revo.yaml"
+    REVO_REPOS_DIR="$dir/repos"
 
     # Set workspace name for yaml module
     YAML_WORKSPACE_NAME="$workspace_name"
@@ -739,15 +786,16 @@ config_init() {
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
     YAML_REPO_TAGS=()
+    YAML_REPO_DEPS=()
 
     # Create directory structure
-    mkdir -p "$MARS_REPOS_DIR"
+    mkdir -p "$REVO_REPOS_DIR"
 
     # Write config
-    yaml_write "$MARS_CONFIG_FILE"
+    yaml_write "$REVO_CONFIG_FILE"
 
     # Create .gitignore
-    printf 'repos/\n' > "$dir/.gitignore"
+    printf 'repos/\n.revo/\n' > "$dir/.gitignore"
 
     return 0
 }
@@ -756,21 +804,21 @@ config_init() {
 # Usage: config_load
 # Returns: 0 on success, 1 on failure
 config_load() {
-    if [[ -z "$MARS_CONFIG_FILE" ]] || [[ ! -f "$MARS_CONFIG_FILE" ]]; then
+    if [[ -z "$REVO_CONFIG_FILE" ]] || [[ ! -f "$REVO_CONFIG_FILE" ]]; then
         return 1
     fi
 
-    yaml_parse "$MARS_CONFIG_FILE"
+    yaml_parse "$REVO_CONFIG_FILE"
 }
 
 # Save configuration
 # Usage: config_save
 config_save() {
-    if [[ -z "$MARS_CONFIG_FILE" ]]; then
+    if [[ -z "$REVO_CONFIG_FILE" ]]; then
         return 1
     fi
 
-    yaml_write "$MARS_CONFIG_FILE"
+    yaml_write "$REVO_CONFIG_FILE"
 }
 
 # Get repos (optionally filtered by tag)
@@ -801,7 +849,7 @@ config_repo_exists() {
     local idx="$1"
     local path
     path=$(yaml_get_path "$idx")
-    [[ -d "$MARS_REPOS_DIR/$path" ]]
+    [[ -d "$REVO_REPOS_DIR/$path" ]]
 }
 
 # Get full path to repo
@@ -810,7 +858,7 @@ config_repo_full_path() {
     local idx="$1"
     local path
     path=$(yaml_get_path "$idx")
-    printf '%s/%s' "$MARS_REPOS_DIR" "$path"
+    printf '%s/%s' "$REVO_REPOS_DIR" "$path"
 }
 
 # Require workspace context
@@ -818,7 +866,7 @@ config_repo_full_path() {
 # Prints error and returns 1 if not in workspace
 config_require_workspace() {
     if ! config_find_root; then
-        printf 'Error: Not in a Mars workspace. Run "mars init" first.\n' >&2
+        printf 'Error: Not in a Revo workspace. Run "revo init" first.\n' >&2
         return 1
     fi
     config_load
@@ -828,7 +876,7 @@ config_require_workspace() {
 # Usage: if config_is_in_workspace "/some/path"; then ...
 config_is_in_workspace() {
     local path="$1"
-    [[ "$path" == "$MARS_WORKSPACE_ROOT"* ]]
+    [[ "$path" == "$REVO_WORKSPACE_ROOT"* ]]
 }
 
 # Get workspace name
@@ -842,7 +890,7 @@ config_default_branch() {
 }
 
 # === lib/git.sh ===
-# Mars CLI - Git Operations
+# Revo CLI - Git Operations
 # Wrapper functions for git commands with consistent error handling
 
 # Result pattern: functions return 0 on success, non-zero on failure
@@ -1122,20 +1170,260 @@ git_exec() {
     return 0
 }
 
+# === lib/scan.sh ===
+# Revo CLI - Repo Scanner
+# Detects language, framework, routes, and metadata per repo.
+# Uses globals to avoid subshells (bash 3.2 compatibility).
+
+SCAN_NAME=""
+SCAN_LANG=""
+SCAN_FRAMEWORK=""
+SCAN_ROUTES=""
+SCAN_DESCRIPTION=""
+SCAN_HAS_CLAUDE_MD=0
+SCAN_HAS_DOCKER=0
+
+# Reset all SCAN_* globals
+scan_reset() {
+    SCAN_NAME=""
+    SCAN_LANG=""
+    SCAN_FRAMEWORK=""
+    SCAN_ROUTES=""
+    SCAN_DESCRIPTION=""
+    SCAN_HAS_CLAUDE_MD=0
+    SCAN_HAS_DOCKER=0
+}
+
+# Extract a top-level JSON string value from a file.
+# Usage: val=$(_scan_json_string "path/to/file.json" "name")
+# Handles simple cases only; no nested objects.
+_scan_json_string() {
+    local file="$1"
+    local key="$2"
+    local line
+    # Match: "key": "value"  (value may contain escaped chars but no quotes)
+    line=$(grep -m1 -E "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null || true)
+    [[ -z "$line" ]] && return 1
+    # Strip to the value
+    line="${line#*\"$key\"}"
+    line="${line#*:}"
+    line="${line#*\"}"
+    line="${line%%\"*}"
+    printf '%s' "$line"
+}
+
+# Returns 0 if the package.json has "dep_name" anywhere in a dependencies block
+_scan_pkg_has_dep() {
+    local file="$1"
+    local dep="$2"
+    grep -q "\"$dep\"[[:space:]]*:" "$file" 2>/dev/null
+}
+
+# Detect framework from package.json dependencies
+_scan_node_framework() {
+    local file="$1"
+    if _scan_pkg_has_dep "$file" "next"; then
+        printf 'Next.js'
+    elif _scan_pkg_has_dep "$file" "nuxt"; then
+        printf 'Nuxt'
+    elif _scan_pkg_has_dep "$file" "@remix-run/react"; then
+        printf 'Remix'
+    elif _scan_pkg_has_dep "$file" "@sveltejs/kit"; then
+        printf 'SvelteKit'
+    elif _scan_pkg_has_dep "$file" "astro"; then
+        printf 'Astro'
+    elif _scan_pkg_has_dep "$file" "vite"; then
+        printf 'Vite'
+    elif _scan_pkg_has_dep "$file" "nestjs" || _scan_pkg_has_dep "$file" "@nestjs/core"; then
+        printf 'NestJS'
+    elif _scan_pkg_has_dep "$file" "fastify"; then
+        printf 'Fastify'
+    elif _scan_pkg_has_dep "$file" "express"; then
+        printf 'Express'
+    elif _scan_pkg_has_dep "$file" "hono"; then
+        printf 'Hono'
+    elif _scan_pkg_has_dep "$file" "react"; then
+        printf 'React'
+    elif _scan_pkg_has_dep "$file" "vue"; then
+        printf 'Vue'
+    elif _scan_pkg_has_dep "$file" "svelte"; then
+        printf 'Svelte'
+    fi
+}
+
+# Detect framework from Python dependency files
+_scan_python_framework() {
+    local repo_dir="$1"
+    local files=()
+    [[ -f "$repo_dir/requirements.txt" ]] && files+=("$repo_dir/requirements.txt")
+    [[ -f "$repo_dir/pyproject.toml" ]] && files+=("$repo_dir/pyproject.toml")
+    [[ -f "$repo_dir/Pipfile" ]] && files+=("$repo_dir/Pipfile")
+
+    [[ ${#files[@]} -eq 0 ]] && return
+
+    if grep -qiE '(^|[^a-z])django([^a-z]|$)' "${files[@]}" 2>/dev/null; then
+        printf 'Django'
+    elif grep -qiE '(^|[^a-z])fastapi([^a-z]|$)' "${files[@]}" 2>/dev/null; then
+        printf 'FastAPI'
+    elif grep -qiE '(^|[^a-z])flask([^a-z]|$)' "${files[@]}" 2>/dev/null; then
+        printf 'Flask'
+    elif grep -qiE '(^|[^a-z])starlette([^a-z]|$)' "${files[@]}" 2>/dev/null; then
+        printf 'Starlette'
+    fi
+}
+
+# List route files in common route directories.
+# Returns comma-separated list (max 6 files, basename only).
+_scan_list_routes() {
+    local repo_dir="$1"
+    local dirs=(
+        "src/routes"
+        "src/api"
+        "src/controllers"
+        "app/api"
+        "app/routes"
+        "routes"
+        "api"
+        "pages/api"
+    )
+
+    local found=()
+    local dir
+    for dir in "${dirs[@]}"; do
+        local full="$repo_dir/$dir"
+        [[ ! -d "$full" ]] && continue
+
+        # Find code files (not tests), max depth 2
+        local file
+        while IFS= read -r file; do
+            [[ -z "$file" ]] && continue
+            [[ "$file" == *".test."* ]] && continue
+            [[ "$file" == *".spec."* ]] && continue
+            found+=("$(basename "$file")")
+            # Cap the number of results
+            [[ ${#found[@]} -ge 6 ]] && break
+        done < <(find "$full" -maxdepth 2 -type f \( -name "*.ts" -o -name "*.js" -o -name "*.tsx" -o -name "*.jsx" -o -name "*.py" -o -name "*.go" -o -name "*.rs" \) 2>/dev/null | sort)
+
+        [[ ${#found[@]} -ge 6 ]] && break
+    done
+
+    # Join as comma-separated
+    local result=""
+    local f
+    for f in "${found[@]}"; do
+        if [[ -z "$result" ]]; then
+            result="$f"
+        else
+            result="$result, $f"
+        fi
+    done
+    printf '%s' "$result"
+}
+
+# First non-empty, non-heading line of README.md (trimmed, first 100 chars)
+_scan_readme_description() {
+    local readme="$1"
+    [[ ! -f "$readme" ]] && return
+
+    local line
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        # Skip empty/whitespace
+        [[ -z "${line// }" ]] && continue
+        # Skip heading lines
+        [[ "$line" =~ ^[[:space:]]*# ]] && continue
+        # Skip HTML tags (often used for logos/badges at the top)
+        [[ "$line" =~ ^[[:space:]]*\< ]] && continue
+        # Skip badge lines
+        [[ "$line" =~ ^[[:space:]]*\[!\[ ]] && continue
+
+        # Trim
+        line="${line#"${line%%[![:space:]]*}"}"
+        line="${line%"${line##*[![:space:]]}"}"
+
+        # Cap length
+        if [[ ${#line} -gt 100 ]]; then
+            line="${line:0:100}..."
+        fi
+        printf '%s' "$line"
+        return 0
+    done < "$readme"
+}
+
+# Scan a repository directory and populate SCAN_* globals.
+# Usage: scan_repo "/path/to/repo"
+scan_repo() {
+    local repo_dir="$1"
+    scan_reset
+
+    [[ ! -d "$repo_dir" ]] && return 1
+
+    # Node.js
+    if [[ -f "$repo_dir/package.json" ]]; then
+        SCAN_LANG="Node.js"
+        SCAN_NAME=$(_scan_json_string "$repo_dir/package.json" "name" || true)
+        SCAN_FRAMEWORK=$(_scan_node_framework "$repo_dir/package.json")
+    fi
+
+    # Python
+    if [[ -z "$SCAN_LANG" ]] && { [[ -f "$repo_dir/pyproject.toml" ]] || [[ -f "$repo_dir/requirements.txt" ]] || [[ -f "$repo_dir/Pipfile" ]]; }; then
+        SCAN_LANG="Python"
+        if [[ -f "$repo_dir/pyproject.toml" ]]; then
+            local pyname
+            pyname=$(grep -m1 -E '^[[:space:]]*name[[:space:]]*=' "$repo_dir/pyproject.toml" 2>/dev/null | sed -E 's/.*=[[:space:]]*"([^"]*)".*/\1/' || true)
+            [[ -n "$pyname" ]] && SCAN_NAME="$pyname"
+        fi
+        SCAN_FRAMEWORK=$(_scan_python_framework "$repo_dir")
+    fi
+
+    # Go
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/go.mod" ]]; then
+        SCAN_LANG="Go"
+        SCAN_NAME=$(grep -m1 '^module ' "$repo_dir/go.mod" 2>/dev/null | awk '{print $2}' || true)
+    fi
+
+    # Rust
+    if [[ -z "$SCAN_LANG" ]] && [[ -f "$repo_dir/Cargo.toml" ]]; then
+        SCAN_LANG="Rust"
+        SCAN_NAME=$(grep -m1 -E '^[[:space:]]*name[[:space:]]*=' "$repo_dir/Cargo.toml" 2>/dev/null | sed -E 's/.*=[[:space:]]*"([^"]*)".*/\1/' || true)
+    fi
+
+    # Routes
+    SCAN_ROUTES=$(_scan_list_routes "$repo_dir")
+
+    # README description
+    if [[ -f "$repo_dir/README.md" ]]; then
+        SCAN_DESCRIPTION=$(_scan_readme_description "$repo_dir/README.md")
+    elif [[ -f "$repo_dir/readme.md" ]]; then
+        SCAN_DESCRIPTION=$(_scan_readme_description "$repo_dir/readme.md")
+    fi
+
+    # CLAUDE.md
+    if [[ -f "$repo_dir/CLAUDE.md" ]]; then
+        SCAN_HAS_CLAUDE_MD=1
+    fi
+
+    # Docker
+    if [[ -f "$repo_dir/Dockerfile" ]] || [[ -f "$repo_dir/docker-compose.yml" ]] || [[ -f "$repo_dir/docker-compose.yaml" ]] || [[ -f "$repo_dir/compose.yml" ]] || [[ -f "$repo_dir/compose.yaml" ]]; then
+        SCAN_HAS_DOCKER=1
+    fi
+
+    return 0
+}
+
 # === lib/commands/init.sh ===
-# Mars CLI - init command
+# Revo CLI - init command
 # Interactive workspace initialization
 
 cmd_init() {
     local workspace_name=""
 
     # Check if already initialized
-    if [[ -f "mars.yaml" ]]; then
+    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
         ui_step_error "Workspace already initialized in this directory"
         return 1
     fi
 
-    ui_intro "Mars - Multi Agentic Repo Workspace"
+    ui_intro "Revo - Claude-first Multi-Repo Workspace"
 
     # Get workspace name
     ui_step "Workspace name?"
@@ -1156,17 +1444,17 @@ cmd_init() {
         return 1
     fi
 
-    ui_step_done "Created mars.yaml"
+    ui_step_done "Created revo.yaml"
     ui_step_done "Created .gitignore"
     ui_step_done "Created repos/ directory"
 
-    ui_outro "Workspace initialized! Run 'mars add <url>' to add repositories."
+    ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
 
     return 0
 }
 
 # === lib/commands/clone.sh ===
-# Mars CLI - clone command
+# Revo CLI - clone command
 # Clone configured repositories with per-repo progress
 
 cmd_clone() {
@@ -1193,7 +1481,7 @@ cmd_clone() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Clone Repositories"
+    ui_intro "Revo - Clone Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1202,7 +1490,7 @@ cmd_clone() {
         if [[ -n "$tag" ]]; then
             ui_step_error "No repositories found with tag: $tag"
         else
-            ui_step_error "No repositories configured. Run 'mars add <url>' first."
+            ui_step_error "No repositories configured. Run 'revo add <url>' first."
         fi
         ui_outro_cancel "Nothing to clone"
         return 1
@@ -1229,7 +1517,7 @@ cmd_clone() {
         url=$(yaml_get_url "$repo")
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         # Already cloned?
         if [[ -d "$full_path" ]] && [[ $force -eq 0 ]]; then
@@ -1260,6 +1548,11 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
+    # Auto-generate workspace CLAUDE.md on first successful clone
+    if [[ $fail_count -eq 0 ]] && [[ $success_count -gt 0 ]]; then
+        context_autogenerate_if_missing
+    fi
+
     # Summary
     ui_bar_line
 
@@ -1278,7 +1571,7 @@ cmd_clone() {
 }
 
 # === lib/commands/status.sh ===
-# Mars CLI - status command
+# Revo CLI - status command
 # Show git status across all repositories
 
 cmd_status() {
@@ -1300,7 +1593,7 @@ cmd_status() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Repository Status"
+    ui_intro "Revo - Repository Status"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1322,7 +1615,7 @@ cmd_status() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_table_row "$path" "$(ui_dim "not cloned")" "-" "-"
@@ -1362,7 +1655,7 @@ cmd_status() {
     ui_bar_line
 
     if [[ $not_cloned -gt 0 ]]; then
-        ui_info "$(ui_dim "$not_cloned repository(ies) not cloned. Run 'mars clone' to clone them.")"
+        ui_info "$(ui_dim "$not_cloned repository(ies) not cloned. Run 'revo clone' to clone them.")"
     fi
 
     ui_outro "Status complete"
@@ -1371,7 +1664,7 @@ cmd_status() {
 }
 
 # === lib/commands/branch.sh ===
-# Mars CLI - branch command
+# Revo CLI - branch command
 # Create a new branch across repositories
 
 cmd_branch() {
@@ -1402,13 +1695,13 @@ cmd_branch() {
     done
 
     if [[ -z "$branch_name" ]]; then
-        ui_step_error "Usage: mars branch <branch-name> [--tag TAG]"
+        ui_step_error "Usage: revo branch <branch-name> [--tag TAG]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Create Branch: $branch_name"
+    ui_intro "Revo - Create Branch: $branch_name"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1428,7 +1721,7 @@ cmd_branch() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"
@@ -1474,7 +1767,7 @@ cmd_branch() {
 }
 
 # === lib/commands/checkout.sh ===
-# Mars CLI - checkout command
+# Revo CLI - checkout command
 # Checkout a branch across repositories
 
 cmd_checkout() {
@@ -1510,13 +1803,13 @@ cmd_checkout() {
     done
 
     if [[ -z "$branch_name" ]]; then
-        ui_step_error "Usage: mars checkout <branch-name> [--tag TAG] [--force]"
+        ui_step_error "Usage: revo checkout <branch-name> [--tag TAG] [--force]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Checkout Branch: $branch_name"
+    ui_intro "Revo - Checkout Branch: $branch_name"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1537,7 +1830,7 @@ cmd_checkout() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"
@@ -1589,7 +1882,7 @@ cmd_checkout() {
 }
 
 # === lib/commands/sync.sh ===
-# Mars CLI - sync command
+# Revo CLI - sync command
 # Pull latest changes across repositories
 
 cmd_sync() {
@@ -1616,7 +1909,7 @@ cmd_sync() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Sync Repositories"
+    ui_intro "Revo - Sync Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1637,7 +1930,7 @@ cmd_sync() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"
@@ -1694,7 +1987,7 @@ cmd_sync() {
 }
 
 # === lib/commands/exec.sh ===
-# Mars CLI - exec command
+# Revo CLI - exec command
 # Run command in each repository
 
 cmd_exec() {
@@ -1735,13 +2028,13 @@ cmd_exec() {
     done
 
     if [[ -z "$command" ]]; then
-        ui_step_error "Usage: mars exec \"<command>\" [--tag TAG]"
+        ui_step_error "Usage: revo exec \"<command>\" [--tag TAG]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Execute: $command"
+    ui_intro "Revo - Execute: $command"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1761,7 +2054,7 @@ cmd_exec() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"
@@ -1813,13 +2106,14 @@ cmd_exec() {
 }
 
 # === lib/commands/add.sh ===
-# Mars CLI - add command
+# Revo CLI - add command
 # Add a repository to the workspace configuration
 
 cmd_add() {
     local url=""
     local path=""
     local tags=""
+    local deps=""
 
     # Parse arguments
     while [[ $# -gt 0 ]]; do
@@ -1830,6 +2124,10 @@ cmd_add() {
                 ;;
             --path)
                 path="$2"
+                shift 2
+                ;;
+            --depends-on)
+                deps="$2"
                 shift 2
                 ;;
             -*)
@@ -1849,7 +2147,7 @@ cmd_add() {
     done
 
     if [[ -z "$url" ]]; then
-        ui_step_error "Usage: mars add <url> [--tags tag1,tag2] [--path custom-path]"
+        ui_step_error "Usage: revo add <url> [--tags tag1,tag2] [--path custom-path] [--depends-on repo1,repo2]"
         return 1
     fi
 
@@ -1878,10 +2176,10 @@ cmd_add() {
         fi
     done
 
-    ui_intro "Mars - Add Repository"
+    ui_intro "Revo - Add Repository"
 
     # Add to config
-    yaml_add_repo "$url" "$path" "$tags"
+    yaml_add_repo "$url" "$path" "$tags" "$deps"
 
     # Save config
     config_save
@@ -1892,8 +2190,12 @@ cmd_add() {
         ui_info "Tags: $tags"
     fi
 
+    if [[ -n "$deps" ]]; then
+        ui_info "Depends on: $deps"
+    fi
+
     ui_bar_line
-    ui_info "$(ui_dim "Run 'mars clone' to clone the repository")"
+    ui_info "$(ui_dim "Run 'revo clone' to clone the repository")"
 
     ui_outro "Repository added to workspace"
 
@@ -1901,7 +2203,7 @@ cmd_add() {
 }
 
 # === lib/commands/list.sh ===
-# Mars CLI - list command
+# Revo CLI - list command
 # List configured repositories
 
 cmd_list() {
@@ -1923,7 +2225,7 @@ cmd_list() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Configured Repositories"
+    ui_intro "Revo - Configured Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -1934,7 +2236,7 @@ cmd_list() {
         else
             ui_info "No repositories configured"
             ui_bar_line
-            ui_info "$(ui_dim "Run 'mars add <url>' to add a repository")"
+            ui_info "$(ui_dim "Run 'revo add <url>' to add a repository")"
         fi
         ui_outro "List complete"
         return 0
@@ -1955,7 +2257,7 @@ cmd_list() {
         path=$(yaml_get_path "$repo")
         local tags
         tags=$(yaml_get_tags "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         local cloned_text
         if [[ -d "$full_path" ]]; then
@@ -1983,24 +2285,881 @@ cmd_list() {
     return 0
 }
 
+# === lib/commands/context.sh ===
+# Revo CLI - context command
+# Scans all cloned repos and writes a workspace-level CLAUDE.md.
+
+# Topological sort over YAML_REPO_DEPS.
+# Sets CONTEXT_ORDER to newline-separated repo indices (roots first).
+# Sets CONTEXT_CYCLE=1 if a cycle was detected (remaining nodes are appended in input order).
+CONTEXT_ORDER=""
+CONTEXT_CYCLE=0
+
+_context_topo_sort() {
+    CONTEXT_ORDER=""
+    CONTEXT_CYCLE=0
+
+    local n="$YAML_REPO_COUNT"
+    [[ $n -eq 0 ]] && return 0
+
+    # placed[i]=1 once emitted
+    local placed=()
+    local i
+    for ((i = 0; i < n; i++)); do
+        placed[$i]=0
+    done
+
+    local remaining=$n
+    local order=""
+
+    # Repeat: find a node whose deps are all placed (or missing)
+    while [[ $remaining -gt 0 ]]; do
+        local made_progress=0
+        for ((i = 0; i < n; i++)); do
+            [[ ${placed[$i]} -eq 1 ]] && continue
+
+            local deps="${YAML_REPO_DEPS[$i]:-}"
+            local all_ready=1
+
+            if [[ -n "$deps" ]]; then
+                # Iterate over comma-separated dep names
+                local dep
+                local old_ifs="$IFS"
+                IFS=','
+                for dep in $deps; do
+                    [[ -z "$dep" ]] && continue
+                    local dep_idx
+                    dep_idx=$(yaml_find_by_name "$dep")
+                    # If the dep isn't in our config, ignore it
+                    if [[ "$dep_idx" -lt 0 ]]; then
+                        continue
+                    fi
+                    if [[ ${placed[$dep_idx]} -eq 0 ]]; then
+                        all_ready=0
+                        break
+                    fi
+                done
+                IFS="$old_ifs"
+            fi
+
+            if [[ $all_ready -eq 1 ]]; then
+                if [[ -z "$order" ]]; then
+                    order="$i"
+                else
+                    order="$order"$'\n'"$i"
+                fi
+                placed[$i]=1
+                remaining=$((remaining - 1))
+                made_progress=1
+            fi
+        done
+
+        if [[ $made_progress -eq 0 ]]; then
+            # Cycle or unresolvable: append remaining in input order and stop
+            CONTEXT_CYCLE=1
+            for ((i = 0; i < n; i++)); do
+                if [[ ${placed[$i]} -eq 0 ]]; then
+                    if [[ -z "$order" ]]; then
+                        order="$i"
+                    else
+                        order="$order"$'\n'"$i"
+                    fi
+                    placed[$i]=1
+                fi
+            done
+            remaining=0
+        fi
+    done
+
+    CONTEXT_ORDER="$order"
+    return 0
+}
+
+# Write the workspace CLAUDE.md to the given path.
+# Usage: _context_write_file "/path/to/CLAUDE.md"
+_context_write_file() {
+    local output="$1"
+    local workspace
+    workspace=$(config_workspace_name)
+
+    # Start file
+    {
+        printf '# Workspace Context (auto-generated by revo)\n'
+        printf '\n'
+        printf 'This workspace contains multiple repositories managed by revo.\n'
+        if [[ -n "$workspace" ]]; then
+            printf 'Workspace: **%s**\n' "$workspace"
+        fi
+        printf '\n'
+        printf '> This file is regenerated by `revo context`. Manual edits below the\n'
+        printf '> `## Agent Instructions` section will be preserved across regeneration.\n'
+        printf '\n'
+        printf '## Repos\n'
+        printf '\n'
+    } > "$output"
+
+    # Per-repo details
+    local i
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        local path tags deps url full_path
+        path=$(yaml_get_path "$i")
+        tags=$(yaml_get_tags "$i")
+        deps=$(yaml_get_deps "$i")
+        url=$(yaml_get_url "$i")
+        full_path="$REVO_REPOS_DIR/$path"
+
+        {
+            printf '### %s\n' "$path"
+
+            if [[ -n "$tags" ]]; then
+                printf -- '- **Tags:** %s\n' "$tags"
+            fi
+            printf -- '- **Path:** repos/%s\n' "$path"
+            if [[ -n "$deps" ]]; then
+                printf -- '- **Depends on:** %s\n' "$deps"
+            fi
+        } >> "$output"
+
+        if [[ -d "$full_path" ]]; then
+            scan_repo "$full_path"
+
+            if [[ -n "$SCAN_LANG" ]]; then
+                if [[ -n "$SCAN_NAME" ]]; then
+                    printf -- '- **Package:** %s (%s)\n' "$SCAN_NAME" "$SCAN_LANG" >> "$output"
+                else
+                    printf -- '- **Language:** %s\n' "$SCAN_LANG" >> "$output"
+                fi
+            fi
+
+            if [[ -n "$SCAN_FRAMEWORK" ]]; then
+                printf -- '- **Framework:** %s\n' "$SCAN_FRAMEWORK" >> "$output"
+            fi
+
+            if [[ -n "$SCAN_ROUTES" ]]; then
+                printf -- '- **API routes:** %s\n' "$SCAN_ROUTES" >> "$output"
+            fi
+
+            if [[ -n "$SCAN_DESCRIPTION" ]]; then
+                printf -- '- **Description:** %s\n' "$SCAN_DESCRIPTION" >> "$output"
+            fi
+
+            if [[ $SCAN_HAS_CLAUDE_MD -eq 1 ]]; then
+                printf -- '- **Has CLAUDE.md:** yes (repo-level context available)\n' >> "$output"
+            fi
+
+            if [[ $SCAN_HAS_DOCKER -eq 1 ]]; then
+                printf -- '- **Containerized:** yes\n' >> "$output"
+            fi
+        else
+            printf -- '- **Status:** not cloned (run `revo clone`)\n' >> "$output"
+            if [[ -n "$url" ]]; then
+                printf -- '- **URL:** %s\n' "$url" >> "$output"
+            fi
+        fi
+
+        printf '\n' >> "$output"
+    done
+
+    # Dependency order
+    {
+        printf '## Dependency Order\n'
+        printf '\n'
+        printf 'When making cross-repo changes, follow this order:\n'
+        printf '\n'
+    } >> "$output"
+
+    _context_topo_sort
+
+    local step=1
+    local idx
+    while IFS= read -r idx; do
+        [[ -z "$idx" ]] && continue
+        local path deps
+        path=$(yaml_get_path "$idx")
+        deps=$(yaml_get_deps "$idx")
+        if [[ -n "$deps" ]]; then
+            printf '%d. **%s** (after: %s)\n' "$step" "$path" "$deps" >> "$output"
+        else
+            printf '%d. **%s**\n' "$step" "$path" >> "$output"
+        fi
+        step=$((step + 1))
+    done <<< "$CONTEXT_ORDER"
+
+    if [[ $CONTEXT_CYCLE -eq 1 ]]; then
+        printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
+    fi
+
+    # Agent instructions
+    {
+        printf '\n'
+        printf '## Agent Instructions\n'
+        printf '\n'
+        printf 'When working in this workspace:\n'
+        printf '\n'
+        printf '1. Read this file first to understand the repo structure\n'
+        printf '2. Check `.revo/features/` for active feature contexts\n'
+        printf '3. Follow the dependency order above when making cross-repo changes\n'
+        printf '4. Each repo may have its own CLAUDE.md with repo-specific instructions\n'
+        printf '5. Use `revo status` to check state across all repos\n'
+        printf '6. Use `revo commit "msg"` to commit across all repos at once\n'
+        printf '7. Use `revo feature <name>` to start a coordinated feature workspace\n'
+        printf '8. Use `revo pr "title"` to open coordinated pull requests\n'
+    } >> "$output"
+}
+
+cmd_context() {
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                printf 'Usage: revo context\n\n'
+                printf 'Scan repos and regenerate workspace CLAUDE.md with framework,\n'
+                printf 'routes, and dependency order for Claude Code to consume.\n'
+                return 0
+                ;;
+            *)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    config_require_workspace || return 1
+
+    ui_intro "Revo - Generate Workspace CLAUDE.md"
+
+    if [[ $YAML_REPO_COUNT -eq 0 ]]; then
+        ui_step_error "No repositories configured"
+        ui_outro_cancel "Nothing to scan"
+        return 1
+    fi
+
+    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
+
+    ui_spinner_start "Scanning $YAML_REPO_COUNT repositories..."
+    _context_write_file "$output"
+    ui_spinner_stop
+    ui_step_done "Scanned:" "$YAML_REPO_COUNT repositories"
+    ui_step_done "Wrote:" "CLAUDE.md"
+
+    if [[ $CONTEXT_CYCLE -eq 1 ]]; then
+        ui_step_error "Dependency cycle detected - see CLAUDE.md for order"
+    fi
+
+    ui_outro "Context generated. Point Claude Code at this workspace."
+
+    return 0
+}
+
+# Called automatically from cmd_clone if CLAUDE.md does not yet exist.
+context_autogenerate_if_missing() {
+    [[ -z "$REVO_WORKSPACE_ROOT" ]] && return 0
+    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
+    [[ -f "$output" ]] && return 0
+    [[ $YAML_REPO_COUNT -eq 0 ]] && return 0
+
+    _context_write_file "$output"
+    ui_info "$(ui_dim "Auto-generated CLAUDE.md for Claude Code")"
+    return 0
+}
+
+# === lib/commands/feature.sh ===
+# Revo CLI - feature command
+# Creates a coordinated feature branch and writes a feature context file.
+
+cmd_feature() {
+    local name=""
+    local tag=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tag)
+                tag="$2"
+                shift 2
+                ;;
+            --help|-h)
+                printf 'Usage: revo feature <name> [--tag TAG]\n\n'
+                printf 'Creates feature/<name> on matching repos and writes\n'
+                printf '.revo/features/<name>.md as a shared context file.\n'
+                return 0
+                ;;
+            -*)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$name" ]]; then
+                    name="$1"
+                else
+                    ui_step_error "Unexpected argument: $1"
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$name" ]]; then
+        ui_step_error "Usage: revo feature <name> [--tag TAG]"
+        return 1
+    fi
+
+    config_require_workspace || return 1
+
+    local branch="feature/$name"
+    ui_intro "Revo - Feature: $name"
+
+    local repos
+    repos=$(config_get_repos "$tag")
+
+    if [[ -z "$repos" ]]; then
+        ui_step_error "No repositories match"
+        ui_outro_cancel "Nothing to do"
+        return 1
+    fi
+
+    local success_count=0
+    local skip_count=0
+    local fail_count=0
+    local involved_indices=()
+
+    while IFS= read -r repo; do
+        [[ -z "$repo" ]] && continue
+
+        local path
+        path=$(yaml_get_path "$repo")
+        local full_path="$REVO_REPOS_DIR/$path"
+
+        if [[ ! -d "$full_path" ]]; then
+            ui_step_done "Skipped (not cloned):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        involved_indices+=("$repo")
+
+        if git_branch_exists "$full_path" "$branch"; then
+            if git_checkout "$full_path" "$branch"; then
+                ui_step_done "Checked out existing:" "$path → $branch"
+                success_count=$((success_count + 1))
+            else
+                ui_step_error "Failed to checkout existing branch: $path"
+                fail_count=$((fail_count + 1))
+            fi
+            continue
+        fi
+
+        if git_branch "$full_path" "$branch"; then
+            ui_step_done "Created:" "$path → $branch"
+            success_count=$((success_count + 1))
+        else
+            ui_step_error "Failed: $path - $GIT_ERROR"
+            fail_count=$((fail_count + 1))
+        fi
+    done <<< "$repos"
+
+    # Write feature context file
+    local feature_dir="$REVO_WORKSPACE_ROOT/.revo/features"
+    mkdir -p "$feature_dir"
+    local feature_file="$feature_dir/$name.md"
+
+    if [[ -f "$feature_file" ]]; then
+        ui_step_done "Feature file exists:" ".revo/features/$name.md"
+    else
+        local timestamp
+        timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        {
+            printf '# Feature: %s\n' "$name"
+            printf '\n'
+            printf '## Status\n'
+            printf '- Created: %s\n' "$timestamp"
+            printf '- Branch: %s\n' "$branch"
+            if [[ -n "$tag" ]]; then
+                printf '- Tag filter: %s\n' "$tag"
+            fi
+            printf '\n'
+            printf '## Repos\n'
+
+            local idx
+            for idx in "${involved_indices[@]}"; do
+                local rpath rtags
+                rpath=$(yaml_get_path "$idx")
+                rtags=$(yaml_get_tags "$idx")
+                if [[ -n "$rtags" ]]; then
+                    printf -- '- %s (tags: %s)\n' "$rpath" "$rtags"
+                else
+                    printf -- '- %s\n' "$rpath"
+                fi
+            done
+
+            printf '\n'
+            printf '## Plan\n'
+            printf '<!-- Describe what this feature does across repos -->\n'
+            printf '<!-- The agent will read this to understand the scope -->\n'
+            printf '\n'
+            printf '## Changes\n'
+            printf '<!-- Track what has been done in each repo -->\n'
+            printf '\n'
+            printf '## Dependencies\n'
+            printf '<!-- Note cross-repo dependencies -->\n'
+        } > "$feature_file"
+
+        ui_step_done "Wrote:" ".revo/features/$name.md"
+    fi
+
+    ui_bar_line
+
+    if [[ $fail_count -eq 0 ]]; then
+        local msg="Feature '$name' ready on $success_count repo(s)"
+        [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
+        ui_info "$(ui_dim "Next: edit .revo/features/$name.md with the plan,")"
+        ui_info "$(ui_dim "then ask Claude Code to work in $REVO_WORKSPACE_ROOT")"
+        ui_outro "$msg"
+    else
+        ui_outro_cancel "$success_count succeeded, $fail_count failed"
+        return 1
+    fi
+
+    return 0
+}
+
+# === lib/commands/commit.sh ===
+# Revo CLI - commit command
+# Commit across dirty repos with the same message.
+
+cmd_commit() {
+    local message=""
+    local tag=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tag)
+                tag="$2"
+                shift 2
+                ;;
+            --help|-h)
+                printf 'Usage: revo commit <message> [--tag TAG]\n\n'
+                printf 'Stages and commits changes across dirty repos with the same message.\n'
+                return 0
+                ;;
+            -*)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$message" ]]; then
+                    message="$1"
+                else
+                    ui_step_error "Unexpected argument: $1"
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$message" ]]; then
+        ui_step_error "Usage: revo commit <message> [--tag TAG]"
+        return 1
+    fi
+
+    config_require_workspace || return 1
+
+    ui_intro "Revo - Commit: $message"
+
+    local repos
+    repos=$(config_get_repos "$tag")
+
+    if [[ -z "$repos" ]]; then
+        ui_step_error "No repositories configured"
+        ui_outro_cancel "Nothing to commit"
+        return 1
+    fi
+
+    local success_count=0
+    local skip_count=0
+    local fail_count=0
+
+    while IFS= read -r repo; do
+        [[ -z "$repo" ]] && continue
+
+        local path
+        path=$(yaml_get_path "$repo")
+        local full_path="$REVO_REPOS_DIR/$path"
+
+        if [[ ! -d "$full_path" ]]; then
+            ui_step_done "Skipped (not cloned):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        if ! git_is_dirty "$full_path"; then
+            ui_step_done "Clean (skipped):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        # Stage
+        if ! git_exec "$full_path" add -A; then
+            ui_step_error "Failed to stage: $path - $GIT_ERROR"
+            fail_count=$((fail_count + 1))
+            continue
+        fi
+
+        # Commit
+        if git_exec "$full_path" commit -m "$message"; then
+            ui_step_done "Committed:" "$path"
+            success_count=$((success_count + 1))
+        else
+            ui_step_error "Failed: $path - $GIT_ERROR"
+            fail_count=$((fail_count + 1))
+        fi
+    done <<< "$repos"
+
+    ui_bar_line
+
+    if [[ $fail_count -eq 0 ]]; then
+        local msg="Committed on $success_count repo(s)"
+        [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
+        ui_outro "$msg"
+    else
+        ui_outro_cancel "$success_count committed, $fail_count failed"
+        return 1
+    fi
+
+    return 0
+}
+
+# === lib/commands/push.sh ===
+# Revo CLI - push command
+# Pushes current branch across repositories.
+
+cmd_push() {
+    local tag=""
+    local set_upstream=1
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tag)
+                tag="$2"
+                shift 2
+                ;;
+            --no-upstream)
+                set_upstream=0
+                shift
+                ;;
+            --help|-h)
+                printf 'Usage: revo push [--tag TAG]\n\n'
+                printf 'Pushes current branch of each repo to origin.\n'
+                printf 'Sets upstream automatically the first time.\n'
+                return 0
+                ;;
+            -*)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                ui_step_error "Unexpected argument: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    config_require_workspace || return 1
+
+    ui_intro "Revo - Push Repositories"
+
+    local repos
+    repos=$(config_get_repos "$tag")
+
+    if [[ -z "$repos" ]]; then
+        ui_step_error "No repositories configured"
+        ui_outro_cancel "Nothing to push"
+        return 1
+    fi
+
+    local success_count=0
+    local skip_count=0
+    local fail_count=0
+
+    while IFS= read -r repo; do
+        [[ -z "$repo" ]] && continue
+
+        local path
+        path=$(yaml_get_path "$repo")
+        local full_path="$REVO_REPOS_DIR/$path"
+
+        if [[ ! -d "$full_path" ]]; then
+            ui_step_done "Skipped (not cloned):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        local branch
+        branch=$(git_current_branch "$full_path")
+        if [[ -z "$branch" ]] || [[ "$branch" == "HEAD" ]]; then
+            ui_step_error "Detached HEAD: $path"
+            fail_count=$((fail_count + 1))
+            continue
+        fi
+
+        # Check if upstream already exists
+        local has_upstream=0
+        if git -C "$full_path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+            has_upstream=1
+        fi
+
+        if [[ $has_upstream -eq 1 ]]; then
+            if git_exec "$full_path" push; then
+                ui_step_done "Pushed:" "$path → $branch"
+                success_count=$((success_count + 1))
+            else
+                ui_step_error "Failed: $path - $GIT_ERROR"
+                fail_count=$((fail_count + 1))
+            fi
+        else
+            if [[ $set_upstream -eq 1 ]]; then
+                if git_exec "$full_path" push -u origin "$branch"; then
+                    ui_step_done "Pushed (set upstream):" "$path → $branch"
+                    success_count=$((success_count + 1))
+                else
+                    ui_step_error "Failed: $path - $GIT_ERROR"
+                    fail_count=$((fail_count + 1))
+                fi
+            else
+                ui_step_error "No upstream and --no-upstream set: $path"
+                fail_count=$((fail_count + 1))
+            fi
+        fi
+    done <<< "$repos"
+
+    ui_bar_line
+
+    if [[ $fail_count -eq 0 ]]; then
+        local msg="Pushed $success_count repo(s)"
+        [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
+        ui_outro "$msg"
+    else
+        ui_outro_cancel "$success_count pushed, $fail_count failed"
+        return 1
+    fi
+
+    return 0
+}
+
+# === lib/commands/pr.sh ===
+# Revo CLI - pr command
+# Creates coordinated pull requests across repos via the gh CLI.
+
+cmd_pr() {
+    local title=""
+    local tag=""
+    local body=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --tag)
+                tag="$2"
+                shift 2
+                ;;
+            --body)
+                body="$2"
+                shift 2
+                ;;
+            --help|-h)
+                printf 'Usage: revo pr <title> [--tag TAG] [--body BODY]\n\n'
+                printf 'Creates pull requests across repos on non-main branches using gh CLI.\n'
+                printf 'After all PRs are created, appends cross-reference links to each body.\n'
+                return 0
+                ;;
+            -*)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+            *)
+                if [[ -z "$title" ]]; then
+                    title="$1"
+                else
+                    ui_step_error "Unexpected argument: $1"
+                    return 1
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    if [[ -z "$title" ]]; then
+        ui_step_error "Usage: revo pr <title> [--tag TAG] [--body BODY]"
+        return 1
+    fi
+
+    if ! command -v gh >/dev/null 2>&1; then
+        ui_step_error "gh CLI not found. Install from https://cli.github.com/"
+        return 1
+    fi
+
+    config_require_workspace || return 1
+
+    ui_intro "Revo - Create PRs: $title"
+
+    local repos
+    repos=$(config_get_repos "$tag")
+
+    if [[ -z "$repos" ]]; then
+        ui_step_error "No repositories configured"
+        ui_outro_cancel "Nothing to do"
+        return 1
+    fi
+
+    # Parallel arrays to collect PR results (bash 3.2)
+    local pr_paths=()
+    local pr_urls=()
+    local pr_numbers=()
+
+    local default_body="$body"
+    if [[ -z "$default_body" ]]; then
+        default_body="Coordinated PR created by \`revo pr\`."
+    fi
+
+    local skip_count=0
+    local fail_count=0
+
+    # --- Pass 1: create PRs ---
+    while IFS= read -r repo; do
+        [[ -z "$repo" ]] && continue
+
+        local path
+        path=$(yaml_get_path "$repo")
+        local full_path="$REVO_REPOS_DIR/$path"
+
+        if [[ ! -d "$full_path" ]]; then
+            ui_step_done "Skipped (not cloned):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        local branch
+        branch=$(git_current_branch "$full_path")
+        if [[ -z "$branch" ]] || [[ "$branch" == "main" ]] || [[ "$branch" == "master" ]]; then
+            ui_step_done "Skipped (on main/master):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        # Skip if no commits ahead of upstream (push required first)
+        git_ahead_behind "$full_path"
+        local has_upstream=0
+        if git -C "$full_path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
+            has_upstream=1
+        fi
+
+        if [[ $has_upstream -eq 1 ]] && [[ $GIT_AHEAD -eq 0 ]]; then
+            ui_step_done "Skipped (no changes ahead of upstream):" "$path"
+            skip_count=$((skip_count + 1))
+            continue
+        fi
+
+        # Create PR via gh
+        local pr_title="[revo] $title"
+        local output
+        if output=$(cd "$full_path" && gh pr create --title "$pr_title" --body "$default_body" 2>&1); then
+            local url
+            url=$(printf '%s' "$output" | grep -Eo 'https://github\.com/[^ ]+/pull/[0-9]+' | tail -1)
+            if [[ -z "$url" ]]; then
+                url="$output"
+            fi
+            pr_paths+=("$path")
+            pr_urls+=("$url")
+            local number
+            number="${url##*/}"
+            pr_numbers+=("$number")
+            ui_step_done "Opened PR:" "$path → $url"
+        else
+            # Maybe a PR already exists
+            local existing
+            existing=$(cd "$full_path" && gh pr view --json url -q .url 2>/dev/null || true)
+            if [[ -n "$existing" ]]; then
+                pr_paths+=("$path")
+                pr_urls+=("$existing")
+                local number
+                number="${existing##*/}"
+                pr_numbers+=("$number")
+                ui_step_done "Existing PR:" "$path → $existing"
+            else
+                ui_step_error "Failed: $path"
+                ui_info "$(ui_dim "$output")"
+                fail_count=$((fail_count + 1))
+            fi
+        fi
+    done <<< "$repos"
+
+    # --- Pass 2: append cross-references if >1 PR ---
+    if [[ ${#pr_paths[@]} -gt 1 ]]; then
+        ui_bar_line
+        ui_step "Linking PRs with cross-references..."
+
+        # Build cross-reference block
+        local xref
+        xref=$'\n\n---\n**Coordinated PRs (revo):**\n'
+        local i
+        for ((i = 0; i < ${#pr_paths[@]}; i++)); do
+            xref+="- ${pr_paths[$i]}: ${pr_urls[$i]}"$'\n'
+        done
+
+        for ((i = 0; i < ${#pr_paths[@]}; i++)); do
+            local repo_path="${pr_paths[$i]}"
+            local pr_number="${pr_numbers[$i]}"
+            local full_path="$REVO_REPOS_DIR/$repo_path"
+            local combined_body="$default_body$xref"
+
+            if (cd "$full_path" && gh pr edit "$pr_number" --body "$combined_body" >/dev/null 2>&1); then
+                ui_step_done "Linked:" "$repo_path"
+            else
+                ui_step_error "Failed to link: $repo_path"
+            fi
+        done
+    fi
+
+    ui_bar_line
+
+    if [[ $fail_count -eq 0 ]]; then
+        local msg="Opened ${#pr_paths[@]} PR(s)"
+        [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
+        ui_outro "$msg"
+    else
+        ui_outro_cancel "${#pr_paths[@]} opened, $fail_count failed"
+        return 1
+    fi
+
+    return 0
+}
+
 # === Main ===
 # --- Help ---
 show_help() {
     cat << EOF
-Mars - Multi Agentic Repo Workspace Manager v$MARS_VERSION
+Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
 
-Usage: mars <command> [options]
+Usage: revo <command> [options]
 
-Commands:
-  init                    Initialize a new workspace
-  clone [--tag TAG]       Clone configured repositories
-  status [--tag TAG]      Show status of all repositories
-  branch NAME [--tag TAG] Create a branch on repositories
+Workspace commands:
+  init                        Initialize a new workspace
+  add URL [--tags TAGS]       Add a repository to the workspace
+  clone [--tag TAG]           Clone configured repositories
+  list [--tag TAG]            List configured repositories
+  status [--tag TAG]          Show status of all repositories
+  sync [--tag TAG]            Pull latest changes on repositories
+  branch NAME [--tag TAG]     Create a branch on repositories
   checkout BRANCH [--tag TAG] Checkout a branch on repositories
-  sync [--tag TAG]        Pull latest changes on repositories
-  exec "CMD" [--tag TAG]  Run a command in each repository
-  add URL [--tags TAGS]   Add a repository to the workspace
-  list [--tag TAG]        List configured repositories
+  exec "CMD" [--tag TAG]      Run a command in each repository
+
+Claude-first commands:
+  context                     Scan repos and regenerate workspace CLAUDE.md
+  feature NAME [--tag TAG]    Create feature branch + context file across repos
+  commit MSG [--tag TAG]      Commit changes across dirty repos
+  push [--tag TAG]            Push branches across repositories
+  pr TITLE [--tag TAG]        Create coordinated PRs via gh CLI
 
 Options:
   --tag TAG       Filter repositories by tag
@@ -2008,26 +3167,27 @@ Options:
   --force, -f     Force operation (clone, checkout)
   --rebase, -r    Use rebase when syncing
   --quiet, -q     Suppress command output (exec)
+  --body TEXT     PR body (pr)
   --help, -h      Show this help
   --version, -v   Show version
 
 Examples:
-  mars init
-  mars add git@github.com:org/frontend.git --tags frontend,web
-  mars add git@github.com:org/backend.git --tags backend,api
-  mars clone
-  mars status
-  mars branch feature-auth
-  mars checkout main
-  mars sync --rebase
-  mars exec "npm install" --tag frontend
+  revo init
+  revo add git@github.com:org/shared-types.git --tags shared
+  revo add git@github.com:org/backend.git --tags backend,api
+  revo clone
+  revo context                                    # regenerate CLAUDE.md
+  revo feature clock-student --tag backend        # coordinated branch
+  revo commit "wire up clock endpoint"
+  revo push
+  revo pr "Clock endpoint for students" --tag backend
 
-Documentation: https://github.com/dean0x/mars
+Documentation: https://github.com/marcus.salinas/revo
 EOF
 }
 
 show_version() {
-    printf 'Mars v%s\n' "$MARS_VERSION"
+    printf 'Revo v%s\n' "$REVO_VERSION"
 }
 
 # --- Main ---
@@ -2070,6 +3230,21 @@ main() {
             ;;
         list)
             cmd_list "$@"
+            ;;
+        context)
+            cmd_context "$@"
+            ;;
+        feature)
+            cmd_feature "$@"
+            ;;
+        commit)
+            cmd_commit "$@"
+            ;;
+        push)
+            cmd_push "$@"
+            ;;
+        pr)
+            cmd_pr "$@"
             ;;
         --help|-h|help)
             show_help

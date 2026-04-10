@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - UI Components (Clack-style)
+# Revo CLI - UI Components (Clack-style)
 # Provides terminal UI primitives with Unicode/ASCII fallback
 
 # Detect color support

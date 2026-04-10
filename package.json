@@ -1,17 +1,17 @@
 {
-  "name": "@dean0x/mars",
-  "version": "0.1.2",
-  "description": "Multi Agentic Repo workspace manager for Git repositories",
+  "name": "revo-cli",
+  "version": "0.2.0",
+  "description": "Claude-first multi-repo workspace manager (fork of Mars)",
   "bin": {
-    "mars": "./dist/mars"
+    "revo": "./dist/revo"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/dean0x/mars.git"
+    "url": "git+https://github.com/marcus.salinas/revo.git"
   },
-  "homepage": "https://github.com/dean0x/mars",
+  "homepage": "https://github.com/marcus.salinas/revo",
   "bugs": {
-    "url": "https://github.com/dean0x/mars/issues"
+    "url": "https://github.com/marcus.salinas/revo/issues"
   },
   "license": "MIT",
   "keywords": [
@@ -20,10 +20,13 @@
     "cli",
     "multi-repo",
     "polyrepo",
-    "repository-manager"
+    "repository-manager",
+    "claude",
+    "claude-code",
+    "agentic"
   ],
   "files": [
-    "dist/mars"
+    "dist/revo"
   ],
   "engines": {
     "node": ">=14"

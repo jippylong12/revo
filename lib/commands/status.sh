@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - status command
+# Revo CLI - status command
 # Show git status across all repositories
 
 cmd_status() {
@@ -21,7 +21,7 @@ cmd_status() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Repository Status"
+    ui_intro "Revo - Repository Status"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -43,7 +43,7 @@ cmd_status() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_table_row "$path" "$(ui_dim "not cloned")" "-" "-"
@@ -83,7 +83,7 @@ cmd_status() {
     ui_bar_line
 
     if [[ $not_cloned -gt 0 ]]; then
-        ui_info "$(ui_dim "$not_cloned repository(ies) not cloned. Run 'mars clone' to clone them.")"
+        ui_info "$(ui_dim "$not_cloned repository(ies) not cloned. Run 'revo clone' to clone them.")"
     fi
 
     ui_outro "Status complete"

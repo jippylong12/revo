@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - branch command
+# Revo CLI - branch command
 # Create a new branch across repositories
 
 cmd_branch() {
@@ -30,13 +30,13 @@ cmd_branch() {
     done
 
     if [[ -z "$branch_name" ]]; then
-        ui_step_error "Usage: mars branch <branch-name> [--tag TAG]"
+        ui_step_error "Usage: revo branch <branch-name> [--tag TAG]"
         return 1
     fi
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Create Branch: $branch_name"
+    ui_intro "Revo - Create Branch: $branch_name"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -56,7 +56,7 @@ cmd_branch() {
 
         local path
         path=$(yaml_get_path "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         if [[ ! -d "$full_path" ]]; then
             ui_step_done "Skipped (not cloned):" "$path"

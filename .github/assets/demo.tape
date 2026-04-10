@@ -17,7 +17,7 @@ Sleep 500ms
 Show
 
 # Step 1: Initialize workspace
-Type "mars init"
+Type "revo init"
 Enter
 Sleep 1.5s
 
@@ -26,31 +26,31 @@ Type "my-project"
 Enter
 Sleep 1s
 
-# Step 2: Add repos with tags
-Type "mars add https://github.com/dean0x/mars-example-frontend.git --tags frontend,web"
+# Step 2: Add repos with tags and deps
+Type "revo add https://github.com/org/shared-types.git --tags shared"
 Enter
 Sleep 1.5s
 
-Type "mars add https://github.com/dean0x/mars-example-backend.git --tags backend,api"
+Type "revo add https://github.com/org/backend.git --tags backend,api --depends-on shared-types"
 Enter
 Sleep 1.5s
 
-Type "mars add https://github.com/dean0x/mars-example-shared.git --tags shared"
+Type "revo add https://github.com/org/frontend.git --tags frontend,web --depends-on backend"
 Enter
 Sleep 1.5s
 
-# Step 3: Clone all repos (spinners show per-repo progress)
-Type "mars clone"
+# Step 3: Clone all repos (auto-generates CLAUDE.md)
+Type "revo clone"
 Enter
 Sleep 8s
 
 # Step 4: Check status
-Type "mars status"
+Type "revo status"
 Enter
 Sleep 2s
 
-# Step 5: Tag filtering with exec
-Type 'mars exec "git log --oneline -3" --tag frontend'
+# Step 5: Regenerate workspace context
+Type "revo context"
 Enter
 Sleep 2s
 

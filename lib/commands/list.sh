@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Mars CLI - list command
+# Revo CLI - list command
 # List configured repositories
 
 cmd_list() {
@@ -21,7 +21,7 @@ cmd_list() {
 
     config_require_workspace || return 1
 
-    ui_intro "Mars - Configured Repositories"
+    ui_intro "Revo - Configured Repositories"
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -32,7 +32,7 @@ cmd_list() {
         else
             ui_info "No repositories configured"
             ui_bar_line
-            ui_info "$(ui_dim "Run 'mars add <url>' to add a repository")"
+            ui_info "$(ui_dim "Run 'revo add <url>' to add a repository")"
         fi
         ui_outro "List complete"
         return 0
@@ -53,7 +53,7 @@ cmd_list() {
         path=$(yaml_get_path "$repo")
         local tags
         tags=$(yaml_get_tags "$repo")
-        local full_path="$MARS_REPOS_DIR/$path"
+        local full_path="$REVO_REPOS_DIR/$path"
 
         local cloned_text
         if [[ -d "$full_path" ]]; then
