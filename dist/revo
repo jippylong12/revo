@@ -4768,22 +4768,31 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    # Real copy — every file is independent (true workspace isolation)
-    if ! cp -RL "$src" "$dest" 2>/dev/null; then
+    # Real copy — every file is independent (true workspace isolation).
+    # Ignore broken symlinks (cp -RL fails on them); copy what we can.
+    cp -RL "$src" "$dest" 2>/dev/null
+    if [[ ! -d "$dest" ]]; then
         return 1
     fi
 
     # Replace heavy immutable directories with hardlinked copies to save disk.
     # These directories are never edited directly — they're rebuilt by package
-    # managers, so hardlinks are safe here.
-    local hardlink_dirs="node_modules .venv venv vendor .gradle build/node_modules"
+    # managers, so hardlinks are safe here. If hardlink fails, keep the real copy.
+    local hardlink_dirs="node_modules .venv venv vendor .gradle build/node_modules target .next .nuxt __pycache__ .dart_tool Pods"
     local dir_name
     for dir_name in $hardlink_dirs; do
         local src_dir="$src/$dir_name"
         local dest_dir="$dest/$dir_name"
         if [[ -d "$src_dir" ]] && [[ -d "$dest_dir" ]]; then
-            rm -rf "$dest_dir"
-            cp -RLl "$src_dir" "$dest_dir" 2>/dev/null || true
+            local backup="$dest_dir.__revo_bak"
+            mv "$dest_dir" "$backup"
+            if cp -RLl "$src_dir" "$dest_dir" 2>/dev/null; then
+                rm -rf "$backup"
+            else
+                # Hardlink failed — restore the real copy
+                rm -rf "$dest_dir" 2>/dev/null
+                mv "$backup" "$dest_dir"
+            fi
         fi
     done
 
