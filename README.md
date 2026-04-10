@@ -1,233 +1,150 @@
 # Revo
 
+[![npm](https://img.shields.io/npm/v/@revotools/cli)](https://www.npmjs.com/package/@revotools/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Claude-first multi-repo workspace manager.
+Revo is a Claude-first multi-repo workspace manager. You install it, point it at your repos, and then talk to Claude — Claude reads a generated `CLAUDE.md` that maps the entire workspace (frameworks, dependencies, routes, active features) and uses revo commands to work across repos: creating isolated workspaces, committing, pushing, opening PRs, and closing everything out when done.
 
-Revo is a fork of [Mars](https://github.com/dean0x/mars). It keeps everything
-Mars gives you — tag-based filtering, coordinated branches, zero dependencies —
-and adds features designed for working with coding agents:
+The intended workflow is: **set up once, then stay in Claude.** You shouldn't need to memorize revo commands — Claude knows them. Just say what you want done.
 
-- **`revo init`** auto-detects existing git repos in the current directory and
-  bootstraps a workspace around them, no manual `revo add` required.
-- **`revo detect`** does the same on demand for an already-populated folder
-  full of clones.
-- **`revo context`** scans your repos and writes a root-level `CLAUDE.md` so
-  Claude Code can understand the whole workspace at a glance — including
-  active feature briefs and a built-in revo command reference.
-- **`revo feature <name>`** creates a coordinated branch and shared context
-  file across matching repos.
-- **`revo commit`**, **`revo push`**, **`revo pr`** let you commit, push, and
-  open PRs across the stack in one step.
-- **`depends_on`** in `revo.yaml` feeds a topological sort into the generated
-  CLAUDE.md so the agent knows what to change first.
-
-Pure bash 3.2+, works on macOS out of the box, no runtime dependencies beyond
-`git` (and optionally `gh` for `revo pr`).
-
-## Quick Start
-
-### From an empty directory
+## Install and Set Up
 
 ```bash
-mkdir my-project && cd my-project
-revo init
+npm install -g @revotools/cli
 
-revo add git@github.com:org/shared-types.git --tags shared
-revo add git@github.com:org/backend.git --tags backend,api --depends-on shared-types
-revo add git@github.com:org/frontend.git --tags frontend,web --depends-on backend
-
-revo clone            # CLAUDE.md is regenerated after each clone batch
-revo context          # regenerate it any time repos change
+cd ~/code/my-project        # your folder of repos (or an empty directory)
+revo init                   # auto-detects existing repos, writes CLAUDE.md
 ```
 
-### From a folder you already populated with clones
+That's it. Open Claude Code in the workspace directory and start talking.
+
+## Talk to Claude
+
+Once the workspace is set up, you work through Claude:
+
+```
+> "use revo to add this repo: git@github.com:org/backend.git with tags backend,api"
+
+> "use revo workspace and work on issue #12"
+
+> "create a feature for the new auth flow across backend and frontend"
+
+> "commit everything and open PRs"
+
+> /revo:closeout
+```
+
+Claude reads the generated `CLAUDE.md`, understands the repo layout and dependencies, and uses revo commands to execute. You stay in the conversation — revo handles the cross-repo coordination underneath.
+
+### Claude Code Skills
+
+Revo ships with Claude Code skills that you can invoke directly:
+
+- **`/revo:closeout`** — wraps up a workspace: merges branches back to main, cleans up the workspace, drops test databases, summarizes and closes linked GitHub issues
+
+## What Revo Does
+
+### Workspace isolation
+
+`revo workspace <name>` creates a full independent copy of your repos with a `feature/<name>` branch. Edit freely — nothing touches the original. When databases are configured, it clones those too.
 
 ```bash
-cd ~/code/my-project   # already has frontend/, backend/, shared/ as git repos
-revo init              # auto-detects existing repos, links them, writes CLAUDE.md
-# — or —
-revo detect            # same idea, runs on its own without prompting
+revo workspace auth-overhaul
+# Path: /Users/you/project/.revo/workspaces/auth-overhaul
+# Database: myapp_dev_ws_auth_overhaul (postgres)
+# cd /Users/you/project/.revo/workspaces/auth-overhaul
 ```
 
-`init` and `detect` both link root-level repos into `repos/` via relative
-symlinks so the rest of revo's data model keeps working without moving any
-files around.
+### Database cloning
 
-Then point Claude Code at the workspace directory and it will read `CLAUDE.md`
-on its own.
+Add `database:` to repos in `revo.yaml` and workspaces automatically clone the database on create, drop it on delete:
 
-## Claude Code Workflow
-
+```yaml
+repos:
+  - url: git@github.com:org/backend.git
+    tags: [backend]
+    database:
+      type: postgres       # postgres | mongodb | mysql
+      name: myapp_dev
 ```
-revo init
-  ↓
-revo add (repos, with --depends-on)
-  ↓
-revo clone                         ── auto-generates CLAUDE.md
-  ↓
-Claude Code reads CLAUDE.md
-  ↓
-revo feature clock-student         ── branch + .revo/features/clock-student.md
-  ↓
-Claude Code works across repos
-  ↓
-revo commit "wire up clock endpoint"
-  ↓
-revo push
-  ↓
-revo pr "Clock endpoint for students"    ── coordinated PRs via gh
+
+Or via CLI: `revo add <url> --database postgres:myapp_dev`
+
+### Context generation
+
+`revo context` scans every repo and writes a `CLAUDE.md` that tells Claude:
+- Per-repo: language, framework, API routes, package name, Docker status
+- Dependency order (topological sort from `depends_on`)
+- Active workspaces with paths and database names
+- Active features with links to `.revo/features/*.md`
+- Workflow instructions so Claude knows how to use revo
+
+### Coordinated operations
+
+All commands work across repos in one shot, with `--tag` filtering:
+
+```bash
+revo commit "wire up auth endpoint"    # commit all dirty repos
+revo push                              # push all branches
+revo pr "Auth endpoint"                # coordinated PRs via gh CLI
+revo sync --tag backend                # pull latest on backend repos
+revo exec "npm test" --tag frontend    # run tests on frontend repos
 ```
+
+### Auto-logged feature tracking
+
+When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<name>.md` — timestamp, message, repos, and SHAs. The closeout skill reads this instead of re-discovering from git.
 
 ## Commands
 
-### Workspace
-
 | Command | Description |
 |---------|-------------|
-| `revo init` | Initialize a new workspace; auto-detects existing git repos in cwd |
-| `revo detect` | Bootstrap revo around git repos already present in cwd |
-| `revo add <url> [--tags t1,t2] [--depends-on r1,r2]` | Add a repository to config |
-| `revo clone [--tag TAG]` | Clone configured repositories (regenerates `CLAUDE.md` after) |
-| `revo list [--tag TAG]` | List configured repositories |
-| `revo status [--tag TAG]` | Show status of all repositories |
-| `revo sync [--tag TAG] [--rebase]` | Pull latest changes |
-| `revo branch <name> [--tag TAG]` | Create branch on repositories |
-| `revo checkout <branch> [--tag TAG]` | Checkout branch on repositories |
-| `revo exec "<cmd>" [--tag TAG]` | Run command in each repository |
+| `revo init` | Initialize workspace, auto-detect existing repos, generate CLAUDE.md |
+| `revo add <url> [options]` | Add a repo (`--tags`, `--depends-on`, `--database type:name`) |
+| `revo clone [--tag TAG]` | Clone configured repos |
+| `revo context` | Regenerate workspace CLAUDE.md |
+| `revo feature <name>` | Create feature branch + context file across repos |
+| `revo workspace <name>` | Create isolated workspace copy with DB cloning |
+| `revo workspaces` | List active workspaces |
+| `revo commit <msg>` | Commit across dirty repos |
+| `revo push` | Push branches across repos |
+| `revo pr <title>` | Create coordinated PRs via `gh` |
+| `revo issue list\|create` | List/create GitHub issues across repos |
+| `revo status` | Branch and dirty state across repos |
+| `revo sync` | Pull latest changes |
+| `revo branch <name>` | Create branch across repos |
+| `revo checkout <branch>` | Checkout branch across repos |
+| `revo exec "<cmd>"` | Run command in each repo |
+| `revo list` | List configured repos |
+| `revo detect` | *(alias for init on existing repos)* |
 
-### Claude-first (new in Revo)
-
-| Command | Description |
-|---------|-------------|
-| `revo context` | Scan repos and regenerate workspace `CLAUDE.md` |
-| `revo feature <name> [--tag TAG]` | Coordinated feature branch + `.revo/features/<name>.md` |
-| `revo commit <msg> [--tag TAG]` | Commit across dirty repos |
-| `revo push [--tag TAG]` | Push branches across repos |
-| `revo pr <title> [--tag TAG] [--body BODY]` | Create coordinated PRs via `gh` |
-
-### What `revo context` detects per repo
-
-- **Node.js** — Next.js, Nuxt, Remix, SvelteKit, Astro, Vite, NestJS, Fastify,
-  Express, Hono, Angular, React, Vue, Svelte, React Native, Expo
-- **Python** — Django, FastAPI, Flask, Starlette
-- **Go** (module name), **Rust** (Cargo), **Java/Kotlin** (Gradle), **Java**
-  (Maven), **Ruby** (Rails, Sinatra), **Swift** (Package.swift)
-- API route directories (`src/routes/`, `src/api/`, `app/api/`, `routes/`,
-  `pages/api/`, etc.)
-- Whether the repo ships its own `CLAUDE.md`, `Dockerfile`, or
-  `docker-compose.yml`
-- The first non-trivial line of `README.md` as a one-line description
-- Any `.revo/features/*.md` briefs at the workspace root, listed as
-  `## Active Features`
-
-## Tag Filtering
-
-Target subsets of repos using `--tag`:
-
-```bash
-# Only clone frontend repos
-revo clone --tag frontend
-
-# Create coordinated feature on backend repos only
-revo feature auth-overhaul --tag backend
-
-# Run npm install on all frontend repos
-revo exec "npm install" --tag frontend
-```
+All commands accept `--tag TAG` to target a subset of repos.
 
 ## Configuration
 
-### revo.yaml
-
 ```yaml
 version: 1
-
 workspace:
   name: "my-project"
-
 repos:
   - url: git@github.com:org/shared-types.git
-    tags: [shared, types]
-
+    tags: [shared]
   - url: git@github.com:org/backend.git
-    path: api                     # optional custom path
     tags: [backend, api]
-    depends_on: [shared-types]    # optional — drives dep order in CLAUDE.md
-
+    depends_on: [shared-types]
+    database:
+      type: postgres
+      name: myapp_dev
   - url: git@github.com:org/frontend.git
-    tags: [frontend, web]
+    tags: [frontend]
     depends_on: [backend]
-
 defaults:
   branch: main
 ```
 
-`depends_on` references repos by their path basename (the bit derived from
-the URL, or the explicit `path` if set).
-
-Migrating from Mars? `mars.yaml` is still honored as a fallback, so `revo`
-works in existing Mars workspaces without renaming anything.
-
-## Workspace Structure
-
-```
-my-project/
-├── revo.yaml           # Workspace configuration
-├── CLAUDE.md           # Auto-generated by revo context
-├── .gitignore          # Contains 'repos/' and '.revo/'
-├── .revo/              # Revo-local state (gitignored)
-│   └── features/       # Feature context files
-│       ├── clock-student.md
-│       └── auth-overhaul.md
-└── repos/              # Cloned repositories (gitignored)
-    ├── shared-types/
-    ├── backend/
-    └── frontend/
-```
-
-## Why not...
-
-- **...a monorepo?** Because these repos are real, separately owned codebases
-  with their own CI, deploys, and histories. A monorepo forces a reorg Revo
-  doesn't need.
-- **...plain sibling directories?** Because you lose tag filtering, coordinated
-  branches, coordinated PRs, and — most importantly — a shared `CLAUDE.md`
-  that the agent can actually read.
-- **...a bespoke orchestrator?** Because Revo does nothing at runtime. It
-  doesn't build, deploy, or test. It just shapes the workspace.
-
-## Installation
-
-### Manual (recommended while pre-release)
-
-```bash
-git clone https://github.com/jippylong12/revo.git
-cd revo
-./build.sh
-cp dist/revo ~/.local/bin/  # or anywhere in PATH
-```
-
-### Shell Script
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/jippylong12/revo/main/install.sh | bash
-```
-
-### npm
-
-```bash
-npm install -g revo-cli
-```
-
-## Contributing
-
-See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, architecture, and release process.
-
 ## Credits
 
-Revo is a fork of [Mars](https://github.com/dean0x/mars) by [@dean0x](https://github.com/dean0x).
-The workspace layer is Mars's work; Revo adds the Claude-first commands on top.
+Fork of [Mars](https://github.com/dean0x/mars) by [@dean0x](https://github.com/dean0x). Pure bash 3.2+, no dependencies beyond `git` (and `gh` for PRs/issues).
 
 ## License
 
