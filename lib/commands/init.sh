@@ -156,7 +156,7 @@ cmd_init() {
     default_name=$(basename "$PWD")
     ui_step "Workspace name?"
     printf '%s  ' "$(ui_bar)"
-    read -r workspace_name
+    read -r workspace_name || true
     if [[ -z "$workspace_name" ]]; then
         workspace_name="$default_name"
     fi

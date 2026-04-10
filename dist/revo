@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.7.2"
+REVO_VERSION="0.7.3"
 
 
 # === lib/ui.sh ===
@@ -2051,7 +2051,7 @@ cmd_init() {
     default_name=$(basename "$PWD")
     ui_step "Workspace name?"
     printf '%s  ' "$(ui_bar)"
-    read -r workspace_name
+    read -r workspace_name || true
     if [[ -z "$workspace_name" ]]; then
         workspace_name="$default_name"
     fi
