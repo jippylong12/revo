@@ -499,7 +499,15 @@ _workspace_delete() {
         fi
     done
 
-    rm -rf "$ws_dir"
+    # Remove workspace directory. rm -rf can fail on macOS with locked files
+    # (.DS_Store, Spotlight indexes), so fall back to rm -r.
+    rm -rf "$ws_dir" 2>/dev/null || rm -r "$ws_dir" 2>/dev/null || true
+
+    if [[ -d "$ws_dir" ]]; then
+        ui_step_error "Could not fully remove .revo/workspaces/$name"
+        ui_outro_cancel "Partial cleanup — remove manually"
+        return 1
+    fi
 
     ui_step_done "Deleted:" ".revo/workspaces/$name"
     ui_outro "Workspace removed"
