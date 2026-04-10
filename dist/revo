@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.7.1"
+REVO_VERSION="0.7.2"
 
 
 # === lib/ui.sh ===
@@ -5099,12 +5099,28 @@ _workspace_create() {
         return 1
     fi
 
-    local msg="Workspace ready at .revo/workspaces/$name/"
+    local msg="Workspace ready"
     ui_info "$(ui_dim "Branch: $branch  •  Repos: $success_count")"
     if [[ $skip_count -gt 0 ]]; then
         ui_info "$(ui_dim "$skip_count repo(s) skipped (not cloned in source)")"
     fi
-    ui_info "$(ui_dim "cd .revo/workspaces/$name and run revo from there.")"
+    ui_info ""
+    ui_info "$(ui_dim "Path:") $ws_dir"
+    if [[ $db_clone_count -gt 0 ]]; then
+        # List cloned database names for easy copy
+        while IFS= read -r repo; do
+            [[ -z "$repo" ]] && continue
+            local db_type db_name
+            db_type=$(yaml_get_db_type "$repo")
+            db_name=$(yaml_get_db_name "$repo")
+            [[ -z "$db_type" ]] && continue
+            local ws_db_name
+            ws_db_name=$(_db_workspace_name "$db_name" "$name")
+            ui_info "$(ui_dim "Database:") $ws_db_name ($db_type)"
+        done <<< "$repos"
+    fi
+    ui_info ""
+    ui_info "$(ui_dim "cd $ws_dir")"
     ui_outro "$msg"
     return 0
 }
