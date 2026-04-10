@@ -27,7 +27,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.7.4"
+REVO_VERSION="0.7.5"
 
 HEADER
 
