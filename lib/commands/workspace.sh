@@ -694,15 +694,14 @@ cmd_workspace() {
             --help|-h)
                 cat << 'EOF'
 Usage:
-  revo workspace <name> [--tag TAG]   Create a workspace (full copy of repos)
-  revo workspace <name> --delete [--force]
-                                       Delete a workspace
-  revo workspace --clean              Remove workspaces whose branches are merged
-  revo workspaces                     List active workspaces
+  revo workspace <name> [--tag TAG]      Create an isolated workspace
+  revo workspace <name> --delete [--force]  Delete a workspace
+  revo workspace --clean                 Remove merged workspaces
+  revo workspace list                    List active workspaces
 
-Workspaces are full copies of all repos (or a tagged subset) under
-.revo/workspaces/<name>/. Each workspace gets its own feature/<name>
-branch. Hardlinks are used where possible so the cost is near-zero.
+Workspaces are independent copies of all repos (or a tagged subset)
+under .revo/workspaces/<name>/. Each gets its own feature/<name>
+branch and cloned databases (if configured).
 
 Run revo from inside .revo/workspaces/<name>/ and it automatically
 operates on the workspace's repos rather than the source tree.
@@ -727,6 +726,12 @@ EOF
     done
 
     config_require_workspace || return 1
+
+    # "revo workspace list" → show workspaces table
+    if [[ "$name" == "list" ]]; then
+        cmd_workspaces
+        return $?
+    fi
 
     case "$action" in
         clean)

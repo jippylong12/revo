@@ -142,10 +142,10 @@ EOF
 cmd_init() {
     local workspace_name=""
 
-    # Already initialized? Bail out.
+    # Already initialized? Just regenerate context.
     if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        ui_step_error "Workspace already initialized in this directory"
-        return 1
+        cmd_context "$@"
+        return $?
     fi
 
     ui_intro "Revo - Claude-first Multi-Repo Workspace"

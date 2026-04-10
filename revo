@@ -49,30 +49,32 @@ Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
 
 Usage: revo <command> [options]
 
-Workspace commands:
-  init                        Initialize a new workspace (auto-detects existing repos)
-  detect                      Bootstrap revo around existing git repos in cwd
+Setup:
+  init                        Initialize workspace or regenerate CLAUDE.md
   add URL [options]            Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
-  list [--tag TAG]            List configured repositories
+
+Repos:
   status [--tag TAG]          Show status of all repositories
-  sync [--tag TAG]            Pull latest changes on repositories
+  sync [--tag TAG]            Pull latest changes
+  list [--tag TAG]            List configured repositories
   branch NAME [--tag TAG]     Create a branch on repositories
   checkout BRANCH [--tag TAG] Checkout a branch on repositories
   exec "CMD" [--tag TAG]      Run a command in each repository
 
-Claude-first commands:
-  context                     Scan repos and regenerate workspace CLAUDE.md
+Features & Workspaces:
   feature NAME [--tag TAG]    Create feature branch + context file across repos
+  workspace NAME [--tag TAG]  Create isolated workspace with DB cloning
+  workspace NAME --delete     Delete a workspace (use --force to discard work)
+  workspace --clean           Remove workspaces whose branches are merged
+  workspace list              List active workspaces
+
+Ship:
   commit MSG [--tag TAG]      Commit changes across dirty repos
   push [--tag TAG]            Push branches across repositories
   pr TITLE [--tag TAG]        Create coordinated PRs via gh CLI
   issue list [options]        List issues across workspace repos
   issue create [options] TITLE Create issue(s) in workspace repos
-  workspace NAME [--tag TAG]  Create a full-copy workspace under .revo/workspaces/
-  workspace NAME --delete     Delete a workspace (use --force to discard work)
-  workspace --clean           Remove workspaces whose branches are merged
-  workspaces                  List active workspaces
 
 Options:
   --tag TAG       Filter repositories by tag
@@ -89,7 +91,7 @@ Examples:
   revo add git@github.com:org/shared-types.git --tags shared
   revo add git@github.com:org/backend.git --tags backend,api
   revo clone
-  revo context                                    # regenerate CLAUDE.md
+  revo init                                       # regenerate CLAUDE.md
   revo feature clock-student --tag backend        # coordinated branch
   revo commit "wire up clock endpoint"
   revo push
@@ -98,9 +100,9 @@ Examples:
   revo issue list --tag backend --json               # JSON for Claude/jq
   revo issue create --repo backend "Add stats endpoint"
   revo issue create --tag mobile --feature stats "Add statistics screen"
-  revo workspace clock-student                    # full copy of all repos
+  revo workspace clock-student                    # isolated copy of all repos
   revo workspace clock-student --tag backend      # only backend repos
-  revo workspaces                                 # list active workspaces
+  revo workspace list                             # list active workspaces
   revo workspace clock-student --delete           # remove when done
 
 Documentation: https://github.com/jippylong12/revo
@@ -125,11 +127,8 @@ main() {
     shift || true
 
     case "$command" in
-        init)
+        init|detect|context)
             cmd_init "$@"
-            ;;
-        detect)
-            cmd_detect "$@"
             ;;
         clone)
             cmd_clone "$@"
@@ -154,9 +153,6 @@ main() {
             ;;
         list)
             cmd_list "$@"
-            ;;
-        context)
-            cmd_context "$@"
             ;;
         feature)
             cmd_feature "$@"
