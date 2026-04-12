@@ -343,6 +343,7 @@ _workspace_create() {
     local success_count=0
     local skip_count=0
     local fail_count=0
+    local success_repos=()
 
     while IFS= read -r repo; do
         [[ -z "$repo" ]] && continue
@@ -387,6 +388,7 @@ _workspace_create() {
             fi
         fi
 
+        success_repos+=("$repo")
         success_count=$((success_count + 1))
     done <<< "$repos"
 
@@ -418,6 +420,56 @@ _workspace_create() {
             ui_spinner_error "DB clone failed: $db_name ($db_type) - $DB_ERROR"
         fi
     done <<< "$repos"
+
+    # Feature file (so closeout has a source of truth)
+    local feature_dir="$REVO_WORKSPACE_ROOT/.revo/features"
+    mkdir -p "$feature_dir"
+    local feature_file="$feature_dir/$name.md"
+
+    if [[ -f "$feature_file" ]]; then
+        ui_step_done "Feature file exists:" ".revo/features/$name.md"
+    else
+        local timestamp
+        timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+        {
+            printf '# Feature: %s\n' "$name"
+            printf '\n'
+            printf '## Status\n'
+            printf -- '- Created: %s\n' "$timestamp"
+            printf -- '- Branch: %s\n' "$branch"
+            printf -- '- Source: revo workspace\n'
+            if [[ -n "$tag" ]]; then
+                printf -- '- Tag filter: %s\n' "$tag"
+            fi
+            printf '\n'
+            printf '## Repos\n'
+
+            local idx
+            for idx in "${success_repos[@]}"; do
+                local rpath rtags
+                rpath=$(yaml_get_path "$idx")
+                rtags=$(yaml_get_tags "$idx")
+                if [[ -n "$rtags" ]]; then
+                    printf -- '- %s (tags: %s)\n' "$rpath" "$rtags"
+                else
+                    printf -- '- %s\n' "$rpath"
+                fi
+            done
+
+            printf '\n'
+            printf '## Plan\n'
+            printf '<!-- Describe what this feature does across repos -->\n'
+            printf '\n'
+            printf '## Changes\n'
+            printf '<!-- Track what has been done in each repo -->\n'
+            printf '\n'
+            printf '## Dependencies\n'
+            printf '<!-- Note cross-repo dependencies -->\n'
+        } > "$feature_file"
+
+        ui_step_done "Wrote:" ".revo/features/$name.md"
+    fi
 
     # Workspace-level CLAUDE.md
     _workspace_write_claude_md "$name" "$ws_dir" "$branch"

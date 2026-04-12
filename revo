@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.8.1"
+REVO_VERSION="0.10.0"
 
 # Determine script directory for sourcing libs
 REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -29,7 +29,6 @@ if [[ -d "$REVO_SCRIPT_DIR/lib" ]]; then
     source "$REVO_SCRIPT_DIR/lib/commands/branch.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/checkout.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/sync.sh"
-    source "$REVO_SCRIPT_DIR/lib/commands/exec.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/add.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/list.sh"
     source "$REVO_SCRIPT_DIR/lib/commands/context.sh"
@@ -60,7 +59,6 @@ Repos:
   list [--tag TAG]            List configured repositories
   branch NAME [--tag TAG]     Create a branch on repositories
   checkout BRANCH [--tag TAG] Checkout a branch on repositories
-  exec "CMD" [--tag TAG]      Run a command in each repository
 
 Features & Workspaces:
   feature NAME [--tag TAG]    Create feature branch + context file across repos
@@ -81,7 +79,6 @@ Options:
   --tags TAGS     Comma-separated list of tags (for add)
   --force, -f     Force operation (clone, checkout)
   --rebase, -r    Use rebase when syncing
-  --quiet, -q     Suppress command output (exec)
   --body TEXT     PR body (pr)
   --help, -h      Show this help
   --version, -v   Show version
@@ -128,7 +125,7 @@ main() {
 
     case "$command" in
         init|detect|context)
-            cmd_init "$@"
+            cmd_init --_command "$command" "$@"
             ;;
         clone)
             cmd_clone "$@"
@@ -144,9 +141,6 @@ main() {
             ;;
         sync)
             cmd_sync "$@"
-            ;;
-        exec)
-            cmd_exec "$@"
             ;;
         add)
             cmd_add "$@"

@@ -13,7 +13,7 @@ beyond `git` (and optionally `gh` for `revo pr`).
 ### Relationship to Mars
 
 Mars provides the workspace layer: `init`, `add`, `clone`, `status`, `sync`,
-`branch`, `checkout`, `exec`, `list`. Revo keeps all of those and adds:
+`branch`, `checkout`, `list`. Revo keeps all of those and adds:
 
 - **`revo context`** — scans cloned repos and generates a root-level `CLAUDE.md`
   that gives Claude Code a full picture of the workspace (frameworks, routes,

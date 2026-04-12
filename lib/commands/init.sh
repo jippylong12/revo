@@ -141,11 +141,55 @@ EOF
 
 cmd_init() {
     local workspace_name=""
+    local _orig_command="init"
 
-    # Already initialized? Just regenerate context.
+    # Parse internal --_command flag (set by dispatcher to distinguish
+    # revo init / revo context / revo detect)
+    if [[ "${1:-}" == "--_command" ]]; then
+        _orig_command="${2:-init}"
+        shift 2
+    fi
+
+    # Already initialized? Route based on original command.
     if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        cmd_context "$@"
-        return $?
+        # revo context / revo detect — just regenerate
+        if [[ "$_orig_command" != "init" ]]; then
+            cmd_context "$@"
+            return $?
+        fi
+
+        # revo init — list repos and prompt Claude to set descriptions
+        config_require_workspace || return 1
+
+        ui_intro "Revo - Workspace Setup"
+        ui_step_done "Workspace:" "$(config_workspace_name)"
+        ui_step_done "Repos:" "$YAML_REPO_COUNT configured"
+        ui_bar_line
+
+        local i
+        for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+            local p desc
+            p=$(yaml_get_path "$i")
+            desc=$(yaml_get_description "$i")
+            if [[ -n "$desc" ]]; then
+                ui_info "  - $(ui_bold "$p") — $(ui_dim "$desc")"
+            else
+                ui_info "  - $(ui_bold "$p") — $(ui_yellow "no description")"
+            fi
+        done
+
+        ui_bar_line
+        ui_info ""
+        ui_info "For each repo, ask the user:"
+        ui_info "  1. Want me to analyze this repo and generate a description?"
+        ui_info "  2. Or do you want to provide the description yourself?"
+        ui_info ""
+        ui_info "For repos to analyze, read entry points and source code to"
+        ui_info "understand what each repo does and how they relate to each other."
+        ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
+        ui_outro "Descriptions ready? Run 'revo context --auto' to generate CLAUDE.md."
+        return 0
     fi
 
     ui_intro "Revo - Claude-first Multi-Repo Workspace"
@@ -214,13 +258,23 @@ cmd_init() {
         fi
     fi
 
-    # If we detected repos, hand off to cmd_context — it now wraps its output
-    # in BEGIN/END markers and preserves any user content in CLAUDE.md, so we
-    # don't need the onboarding placeholder. When no repos were detected,
-    # write the placeholder so Claude has something to read.
+    # If we detected repos, write basic CLAUDE.md and prompt Claude to
+    # analyze each repo for descriptions.
     if [[ $detected_count -gt 0 ]]; then
         ui_bar_line
-        cmd_context
+        _init_write_claude_md
+        ui_bar_line
+        ui_info "$(ui_bold "$detected_count repo(s) detected but descriptions are not set.")"
+        ui_info ""
+        ui_info "For each repo, ask the user:"
+        ui_info "  1. Want me to analyze this repo and generate a description?"
+        ui_info "  2. Or do you want to provide the description yourself?"
+        ui_info ""
+        ui_info "For repos to analyze, read entry points and source code to"
+        ui_info "understand what each repo does and how they relate to each other."
+        ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
+        ui_outro "Run 'revo init' again after setting descriptions."
         return 0
     fi
 

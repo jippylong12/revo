@@ -17,6 +17,8 @@ YAML_REPO_DEPS=()
 YAML_REPO_BRANCHES=()
 YAML_REPO_DB_TYPES=()
 YAML_REPO_DB_NAMES=()
+YAML_REPO_TYPES=()
+YAML_REPO_DESCRIPTIONS=()
 
 yaml_parse() {
     local file="$1"
@@ -37,6 +39,8 @@ yaml_parse() {
     YAML_REPO_BRANCHES=()
     YAML_REPO_DB_TYPES=()
     YAML_REPO_DB_NAMES=()
+    YAML_REPO_TYPES=()
+    YAML_REPO_DESCRIPTIONS=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -93,6 +97,8 @@ yaml_parse() {
                 YAML_REPO_BRANCHES[$current_index]=""
                 YAML_REPO_DB_TYPES[$current_index]=""
                 YAML_REPO_DB_NAMES[$current_index]=""
+                YAML_REPO_TYPES[$current_index]=""
+                YAML_REPO_DESCRIPTIONS[$current_index]=""
                 in_database=0
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
@@ -119,6 +125,24 @@ yaml_parse() {
                     YAML_REPO_DEPS[$current_index]="$deps_str"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
                     YAML_REPO_BRANCHES[$current_index]="${BASH_REMATCH[1]}"
+                elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
+                    local type_val="${BASH_REMATCH[1]}"
+                    # Strip surrounding quotes
+                    type_val="${type_val#\"}"
+                    type_val="${type_val%\"}"
+                    type_val="${type_val#\'}"
+                    type_val="${type_val%\'}"
+                    YAML_REPO_TYPES[$current_index]="$type_val"
+                elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^description:[[:space:]]*(.*) ]]; then
+                    local desc="${BASH_REMATCH[1]}"
+                    # Strip surrounding quotes
+                    desc="${desc#\"}"
+                    desc="${desc%\"}"
+                    desc="${desc#\'}"
+                    desc="${desc%\'}"
+                    # Unescape embedded quotes
+                    desc="${desc//\\\"/\"}"
+                    YAML_REPO_DESCRIPTIONS[$current_index]="$desc"
                 elif [[ "$trimmed" == "database:" ]]; then
                     in_database=1
                 elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
@@ -219,6 +243,18 @@ yaml_get_branch() {
     printf '%s' "${YAML_REPO_BRANCHES[$idx]:-}"
 }
 
+# Get repo type by index (frontend, backend, shared, mobile, infra, or empty)
+yaml_get_type() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_TYPES[$idx]:-}"
+}
+
+# Get repo description by index
+yaml_get_description() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_DESCRIPTIONS[$idx]:-}"
+}
+
 # Get repo database type by index (postgres, mongodb, mysql, or empty)
 yaml_get_db_type() {
     local idx="$1"
@@ -280,6 +316,19 @@ yaml_write() {
                 printf '    tags: [%s]\n' "$tags"
             fi
 
+            # Write type if present (quoted for safety)
+            local type="${YAML_REPO_TYPES[$i]:-}"
+            if [[ -n "$type" ]]; then
+                printf '    type: "%s"\n' "$type"
+            fi
+
+            # Write description if present (escape embedded quotes)
+            local desc="${YAML_REPO_DESCRIPTIONS[$i]:-}"
+            if [[ -n "$desc" ]]; then
+                desc="${desc//\"/\\\"}"
+                printf '    description: "%s"\n' "$desc"
+            fi
+
             # Write depends_on if present
             if [[ -n "$deps" ]]; then
                 printf '    depends_on: [%s]\n' "$deps"
@@ -306,7 +355,7 @@ yaml_write() {
 }
 
 # Add a repo to the config
-# Usage: yaml_add_repo "url" "path" "tags" "deps" ["branch" ["db_type" "db_name"]]
+# Usage: yaml_add_repo "url" "path" "tags" "deps" ["branch" ["db_type" "db_name" ["type" "description"]]]
 yaml_add_repo() {
     local url="$1"
     local path="${2:-}"
@@ -315,6 +364,8 @@ yaml_add_repo() {
     local branch="${5:-}"
     local db_type="${6:-}"
     local db_name="${7:-}"
+    local type="${8:-}"
+    local description="${9:-}"
 
     local idx=$YAML_REPO_COUNT
 
@@ -329,6 +380,8 @@ yaml_add_repo() {
     YAML_REPO_BRANCHES[$idx]="$branch"
     YAML_REPO_DB_TYPES[$idx]="$db_type"
     YAML_REPO_DB_NAMES[$idx]="$db_name"
+    YAML_REPO_TYPES[$idx]="$type"
+    YAML_REPO_DESCRIPTIONS[$idx]="$description"
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }

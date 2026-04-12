@@ -8,6 +8,9 @@ SCAN_LANG=""
 SCAN_FRAMEWORK=""
 SCAN_ROUTES=""
 SCAN_DESCRIPTION=""
+SCAN_PKG_DESCRIPTION=""
+SCAN_ENTRY_POINTS=""
+SCAN_TOP_DIRS=""
 SCAN_HAS_CLAUDE_MD=0
 SCAN_HAS_DOCKER=0
 
@@ -18,6 +21,9 @@ scan_reset() {
     SCAN_FRAMEWORK=""
     SCAN_ROUTES=""
     SCAN_DESCRIPTION=""
+    SCAN_PKG_DESCRIPTION=""
+    SCAN_ENTRY_POINTS=""
+    SCAN_TOP_DIRS=""
     SCAN_HAS_CLAUDE_MD=0
     SCAN_HAS_DOCKER=0
 }
@@ -29,14 +35,17 @@ _scan_json_string() {
     local file="$1"
     local key="$2"
     local line
-    # Match: "key": "value"  (value may contain escaped chars but no quotes)
-    line=$(grep -m1 -E "\"$key\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null || true)
+    # Match the line containing "key": (value extracted in post-processing)
+    line=$(grep -m1 -E "\"$key\"[[:space:]]*:" "$file" 2>/dev/null || true)
     [[ -z "$line" ]] && return 1
-    # Strip to the value
+    # Strip everything up to and including the opening quote of the value
     line="${line#*\"$key\"}"
     line="${line#*:}"
     line="${line#*\"}"
-    line="${line%%\"*}"
+    # Strip from the last quote to end of line (handles escaped quotes)
+    line="${line%\"*}"
+    # Unescape embedded quotes
+    line="${line//\\\"/\"}"
     printf '%s' "$line"
 }
 
@@ -164,6 +173,82 @@ _scan_list_routes() {
     printf '%s' "$result"
 }
 
+# Extract the "description" field from package.json
+_scan_pkg_description() {
+    local file="$1"
+    local desc
+    desc=$(_scan_json_string "$file" "description" || true)
+    # Skip generic/boilerplate descriptions
+    [[ -z "$desc" ]] && return
+    case "$desc" in
+        ""|"undefined"|"TODO"|"TBD"|"FIXME")
+            return ;;
+    esac
+    printf '%s' "$desc"
+}
+
+# Extract description from pyproject.toml
+_scan_pyproject_description() {
+    local file="$1"
+    [[ ! -f "$file" ]] && return
+    local desc
+    desc=$(grep -m1 -E '^[[:space:]]*description[[:space:]]*=' "$file" 2>/dev/null | sed -E 's/.*=[[:space:]]*"([^"]*)".*/\1/' || true)
+    [[ -z "$desc" ]] && return
+    printf '%s' "$desc"
+}
+
+# List top-level directories (excluding hidden, node_modules, vendor, dist)
+_scan_top_dirs() {
+    local repo_dir="$1"
+    local found=""
+    local d
+    for d in "$repo_dir"/*/; do
+        [[ ! -d "$d" ]] && continue
+        local name
+        name=$(basename "$d")
+        case "$name" in
+            .*|node_modules|vendor|dist|build|.next|__pycache__|.git|coverage|.idea|.vscode)
+                continue ;;
+        esac
+        if [[ -z "$found" ]]; then
+            found="$name"
+        else
+            found="$found, $name"
+        fi
+    done
+    printf '%s' "$found"
+}
+
+# Detect entry points / main files
+_scan_entry_points() {
+    local repo_dir="$1"
+    local found=""
+    local candidates=(
+        "src/index.ts" "src/index.tsx" "src/index.js" "src/index.jsx"
+        "src/main.ts" "src/main.tsx" "src/main.js" "src/main.jsx"
+        "src/app.ts" "src/app.tsx" "src/app.js" "src/app.jsx"
+        "src/App.tsx" "src/App.jsx" "src/App.vue"
+        "app/layout.tsx" "app/page.tsx"
+        "pages/index.tsx" "pages/index.jsx" "pages/_app.tsx"
+        "index.ts" "index.js" "main.ts" "main.js"
+        "main.go" "cmd/main.go" "cmd/server/main.go"
+        "main.py" "app.py" "manage.py" "wsgi.py"
+        "lib/main.dart"
+        "App.tsx" "App.jsx" "App.js"
+    )
+    local c
+    for c in "${candidates[@]}"; do
+        if [[ -f "$repo_dir/$c" ]]; then
+            if [[ -z "$found" ]]; then
+                found="$c"
+            else
+                found="$found, $c"
+            fi
+        fi
+    done
+    printf '%s' "$found"
+}
+
 # First non-empty, non-heading line of README.md (trimmed, first 100 chars)
 _scan_readme_description() {
     local readme="$1"
@@ -255,12 +340,30 @@ scan_repo() {
     # Routes
     SCAN_ROUTES=$(_scan_list_routes "$repo_dir")
 
-    # README description
-    if [[ -f "$repo_dir/README.md" ]]; then
+    # Description: prefer package manifest description over README first line
+    # 1. package.json description (usually the most intentional)
+    if [[ -f "$repo_dir/package.json" ]]; then
+        SCAN_PKG_DESCRIPTION=$(_scan_pkg_description "$repo_dir/package.json")
+    fi
+    # 2. pyproject.toml description
+    if [[ -z "$SCAN_PKG_DESCRIPTION" ]] && [[ -f "$repo_dir/pyproject.toml" ]]; then
+        SCAN_PKG_DESCRIPTION=$(_scan_pyproject_description "$repo_dir/pyproject.toml")
+    fi
+
+    # Set SCAN_DESCRIPTION: package description first, README fallback
+    if [[ -n "$SCAN_PKG_DESCRIPTION" ]]; then
+        SCAN_DESCRIPTION="$SCAN_PKG_DESCRIPTION"
+    elif [[ -f "$repo_dir/README.md" ]]; then
         SCAN_DESCRIPTION=$(_scan_readme_description "$repo_dir/README.md")
     elif [[ -f "$repo_dir/readme.md" ]]; then
         SCAN_DESCRIPTION=$(_scan_readme_description "$repo_dir/readme.md")
     fi
+
+    # Entry points
+    SCAN_ENTRY_POINTS=$(_scan_entry_points "$repo_dir")
+
+    # Top-level directories
+    SCAN_TOP_DIRS=$(_scan_top_dirs "$repo_dir")
 
     # CLAUDE.md
     if [[ -f "$repo_dir/CLAUDE.md" ]]; then

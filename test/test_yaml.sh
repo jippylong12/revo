@@ -361,6 +361,187 @@ EOF
     test_pass
 }
 
+test_type_description_parse() {
+    test_start "yaml_parse - type and description fields"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: td-test
+repos:
+  - url: git@github.com:org/frontend.git
+    tags: [frontend]
+    type: frontend
+    description: "Main web dashboard"
+  - url: git@github.com:org/backend.git
+    tags: [backend]
+    type: backend
+    description: "REST API server"
+    database:
+      type: postgres
+      name: myapp_dev
+  - url: git@github.com:org/lib.git
+    tags: [shared]
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "3" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    assert_eq "frontend" "$(yaml_get_type 0)" || { rm "$test_file"; return 1; }
+    assert_eq "Main web dashboard" "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+    assert_eq "backend" "$(yaml_get_type 1)" || { rm "$test_file"; return 1; }
+    assert_eq "REST API server" "$(yaml_get_description 1)" || { rm "$test_file"; return 1; }
+    assert_eq "postgres" "$(yaml_get_db_type 1)" || { rm "$test_file"; return 1; }
+    assert_eq "" "$(yaml_get_type 2)" || { rm "$test_file"; return 1; }
+    assert_eq "" "$(yaml_get_description 2)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_type_description_roundtrip() {
+    test_start "yaml_write - type/description roundtrip"
+
+    YAML_WORKSPACE_NAME="td-rt"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=2
+    YAML_REPO_URLS=("git@github.com:o/a.git" "git@github.com:o/b.git")
+    YAML_REPO_PATHS=("a" "b")
+    YAML_REPO_TAGS=("frontend" "backend")
+    YAML_REPO_DEPS=("" "")
+    YAML_REPO_BRANCHES=("" "")
+    YAML_REPO_DB_TYPES=("" "")
+    YAML_REPO_DB_NAMES=("" "")
+    YAML_REPO_TYPES=("frontend" "backend")
+    YAML_REPO_DESCRIPTIONS=("Web app" "API server")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq "2" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    assert_eq "frontend" "$(yaml_get_type 0)" || { rm "$test_file"; return 1; }
+    assert_eq "Web app" "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+    assert_eq "backend" "$(yaml_get_type 1)" || { rm "$test_file"; return 1; }
+    assert_eq "API server" "$(yaml_get_description 1)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_description_with_quotes() {
+    test_start "yaml_write - description with embedded quotes"
+
+    YAML_WORKSPACE_NAME="quote-test"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("backend")
+    YAML_REPO_DESCRIPTIONS=('A "great" API server')
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq 'A "great" API server' "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_type_quoted_roundtrip() {
+    test_start "yaml_write - type field quoted roundtrip"
+
+    YAML_WORKSPACE_NAME="type-quote"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("frontend")
+    YAML_REPO_DESCRIPTIONS=("")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+
+    # Verify the type is quoted in the output
+    grep -q 'type: "frontend"' "$test_file" || { test_fail "type should be quoted in output"; rm "$test_file"; return 1; }
+
+    yaml_parse "$test_file"
+    assert_eq "frontend" "$(yaml_get_type 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_description_yaml_injection() {
+    test_start "yaml_write - description injection is escaped"
+
+    YAML_WORKSPACE_NAME="inject-test"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("backend")
+    YAML_REPO_DESCRIPTIONS=('legit" url: evil')
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    # Repo count should still be 1 (no injection)
+    assert_eq "1" "$YAML_REPO_COUNT" || { rm "$test_file"; return 1; }
+    # Description should roundtrip
+    assert_eq 'legit" url: evil' "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_description_with_colon() {
+    test_start "yaml_write - description with colon roundtrip"
+
+    YAML_WORKSPACE_NAME="colon-test"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("")
+    YAML_REPO_DESCRIPTIONS=("REST API: handles user auth")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq "REST API: handles user auth" "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
 # --- Run tests ---
 
 printf "\n=== YAML Parser Tests ===\n\n"
@@ -377,6 +558,12 @@ test_database_parse
 test_database_roundtrip
 test_database_add_repo
 test_database_invalid_name_rejected
+test_type_description_parse
+test_type_description_roundtrip
+test_description_with_quotes
+test_type_quoted_roundtrip
+test_description_yaml_injection
+test_description_with_colon
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

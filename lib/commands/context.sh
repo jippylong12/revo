@@ -193,13 +193,40 @@ _context_write_file() {
             fi
         fi
 
+        # Get stored type and description
+        local repo_type repo_desc
+        repo_type=$(yaml_get_type "$i")
+        repo_desc=$(yaml_get_description "$i")
+
         {
             printf '### %s\n' "$path"
 
-            if [[ -n "$tags" ]]; then
-                printf -- '- **Tags:** %s\n' "$tags"
+            if [[ -n "$repo_type" ]]; then
+                printf -- '- **Type:** %s\n' "$repo_type"
             fi
             printf -- '- **Path:** repos/%s\n' "$path"
+
+            # Strip repo name from tags for display (it's already the heading)
+            local display_tags=""
+            if [[ -n "$tags" ]]; then
+                local tag_item
+                local old_ifs="$IFS"
+                IFS=','
+                for tag_item in $tags; do
+                    [[ -z "$tag_item" ]] && continue
+                    [[ "$tag_item" == "$path" ]] && continue
+                    if [[ -z "$display_tags" ]]; then
+                        display_tags="$tag_item"
+                    else
+                        display_tags="$display_tags,$tag_item"
+                    fi
+                done
+                IFS="$old_ifs"
+            fi
+            if [[ -n "$display_tags" ]]; then
+                printf -- '- **Tags:** %s\n' "$display_tags"
+            fi
+
             if [[ -n "$branch" ]] && [[ "$branch" != "$YAML_DEFAULTS_BRANCH" ]]; then
                 printf -- '- **Default branch:** %s\n' "$branch"
             fi
@@ -210,6 +237,15 @@ _context_write_file() {
 
         if [[ -d "$full_path" ]]; then
             scan_repo "$full_path"
+
+            # Use stored description, fall back to auto-detected
+            local final_desc="$repo_desc"
+            if [[ -z "$final_desc" ]]; then
+                final_desc="$SCAN_DESCRIPTION"
+            fi
+            if [[ -n "$final_desc" ]]; then
+                printf -- '- **Description:** %s\n' "$final_desc" >> "$output"
+            fi
 
             if [[ -n "$SCAN_LANG" ]]; then
                 if [[ -n "$SCAN_NAME" ]]; then
@@ -225,10 +261,6 @@ _context_write_file() {
 
             if [[ -n "$SCAN_ROUTES" ]]; then
                 printf -- '- **API routes:** %s\n' "$SCAN_ROUTES" >> "$output"
-            fi
-
-            if [[ -n "$SCAN_DESCRIPTION" ]]; then
-                printf -- '- **Description:** %s\n' "$SCAN_DESCRIPTION" >> "$output"
             fi
 
             if [[ $SCAN_HAS_CLAUDE_MD -eq 1 ]]; then
@@ -261,33 +293,43 @@ _context_write_file() {
         printf '\n' >> "$output"
     done
 
-    # Dependency order
-    {
-        printf '## Dependency Order\n'
-        printf '\n'
-        printf 'When making cross-repo changes, follow this order:\n'
-        printf '\n'
-    } >> "$output"
-
-    _context_topo_sort
-
-    local step=1
-    local idx
-    while IFS= read -r idx; do
-        [[ -z "$idx" ]] && continue
-        local path deps
-        path=$(yaml_get_path "$idx")
-        deps=$(yaml_get_deps "$idx")
-        if [[ -n "$deps" ]]; then
-            printf '%d. **%s** (after: %s)\n' "$step" "$path" "$deps" >> "$output"
-        else
-            printf '%d. **%s**\n' "$step" "$path" >> "$output"
+    # Dependency order — only show when at least one repo has depends_on
+    local has_deps=0
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        if [[ -n "${YAML_REPO_DEPS[$i]:-}" ]]; then
+            has_deps=1
+            break
         fi
-        step=$((step + 1))
-    done <<< "$CONTEXT_ORDER"
+    done
 
-    if [[ $CONTEXT_CYCLE -eq 1 ]]; then
-        printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
+    if [[ $has_deps -eq 1 ]]; then
+        {
+            printf '## Dependency Order\n'
+            printf '\n'
+            printf 'When making cross-repo changes, follow this order:\n'
+            printf '\n'
+        } >> "$output"
+
+        _context_topo_sort
+
+        local step=1
+        local idx
+        while IFS= read -r idx; do
+            [[ -z "$idx" ]] && continue
+            local path deps
+            path=$(yaml_get_path "$idx")
+            deps=$(yaml_get_deps "$idx")
+            if [[ -n "$deps" ]]; then
+                printf '%d. **%s** (after: %s)\n' "$step" "$path" "$deps" >> "$output"
+            else
+                printf '%d. **%s**\n' "$step" "$path" >> "$output"
+            fi
+            step=$((step + 1))
+        done <<< "$CONTEXT_ORDER"
+
+        if [[ $CONTEXT_CYCLE -eq 1 ]]; then
+            printf '\n> Warning: a dependency cycle was detected. Listed in best-effort order.\n' >> "$output"
+        fi
     fi
 
     # Active workspaces (any .revo/workspaces/*/ dirs)
@@ -404,7 +446,7 @@ _context_write_file() {
         printf '### Quick Reference\n'
         printf '\n'
         printf 'Run `revo --help` for all commands. Key ones: `status`, `commit`, `push`,\n'
-        printf '`pr`, `feature`, `workspace`, `sync`, `exec`, `checkout default`, `issue list`.\n'
+        printf '`pr`, `feature`, `workspace`, `sync`, `checkout default`, `issue list`.\n'
         printf 'All commands accept `--tag TAG` to filter by repo tag.\n'
         printf 'See `.revo/COMMANDS.md` for the full command reference with examples.\n'
         printf '\n'
@@ -432,7 +474,9 @@ _context_write_commands_file() {
         printf '\n'
         printf -- '- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo\n'
         printf -- '- `revo clone` — clone all configured repos\n'
-        printf -- '- `revo context` — regenerate workspace CLAUDE.md\n'
+        printf -- '- `revo context` — regenerate workspace CLAUDE.md (interactive)\n'
+        printf -- '- `revo context --auto` — regenerate without prompts (uses stored/auto-detected values)\n'
+        printf -- '- `revo context --analyze` — output detailed scan report per repo (no file changes)\n'
         printf -- '- `revo detect` — bootstrap around existing repos in cwd\n'
         printf '\n'
         printf '## Daily Workflow\n'
@@ -443,7 +487,6 @@ _context_write_commands_file() {
         printf -- '- `revo commit "msg" [--tag t]` — commit all dirty repos\n'
         printf -- '- `revo push [--tag t]` — push all repos\n'
         printf -- '- `revo pr "title" [--tag t]` — create coordinated PRs via gh CLI\n'
-        printf -- '- `revo exec "cmd" [--tag t]` — run command in filtered repos\n'
         printf -- '- `revo checkout <branch> [--tag t]` — switch branch across repos\n'
         printf -- '- `revo checkout default` — switch each repo to its own default branch (handles mixed main/master)\n'
         printf '\n'
@@ -473,7 +516,6 @@ _context_write_commands_file() {
         printf 'All commands support `--tag <tag>` to target specific repos:\n'
         printf '\n'
         printf '```\n'
-        printf 'revo exec "npm test" --tag frontend\n'
         printf 'revo sync --tag backend\n'
         printf 'revo commit "fix: typo" --tag api\n'
         printf '```\n'
@@ -505,15 +547,304 @@ _context_write_commands_file() {
     } > "$target"
 }
 
+# Auto-detect a repo type from its tags and scan results.
+# Sets _CONTEXT_AUTO_TYPE to the detected type or empty string.
+_CONTEXT_AUTO_TYPE=""
+_context_detect_type() {
+    local idx="$1"
+    _CONTEXT_AUTO_TYPE=""
+
+    local tags="${YAML_REPO_TAGS[$idx]:-}"
+
+    # Check tags first
+    if [[ ",$tags," == *",frontend,"* ]]; then
+        _CONTEXT_AUTO_TYPE="frontend"
+        return
+    elif [[ ",$tags," == *",backend,"* ]]; then
+        _CONTEXT_AUTO_TYPE="backend"
+        return
+    elif [[ ",$tags," == *",shared,"* ]]; then
+        _CONTEXT_AUTO_TYPE="shared"
+        return
+    elif [[ ",$tags," == *",mobile,"* ]]; then
+        _CONTEXT_AUTO_TYPE="mobile"
+        return
+    elif [[ ",$tags," == *",infra,"* ]]; then
+        _CONTEXT_AUTO_TYPE="infra"
+        return
+    fi
+
+    # Fall back to framework detection
+    if [[ -n "$SCAN_FRAMEWORK" ]]; then
+        case "$SCAN_FRAMEWORK" in
+            Next.js|Nuxt|Remix|SvelteKit|Astro|React|Vue|Svelte|Angular|Vite)
+                _CONTEXT_AUTO_TYPE="frontend" ;;
+            "Expo (React Native)"|"React Native")
+                _CONTEXT_AUTO_TYPE="mobile" ;;
+            Express|Fastify|NestJS|Hono|Django|FastAPI|Flask|Starlette|Rails|Sinatra)
+                _CONTEXT_AUTO_TYPE="backend" ;;
+        esac
+    fi
+}
+
+# Interactive mode: walk each repo and ask for type + description.
+# Stores results in YAML_REPO_TYPES / YAML_REPO_DESCRIPTIONS and saves.
+_context_interactive() {
+    ui_step "Configure each repo for the workspace CLAUDE.md"
+    ui_info "$(ui_dim "Press enter to accept defaults, or type to override.")"
+    ui_bar_line
+
+    local i
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        local path full_path
+        path=$(yaml_get_path "$i")
+        full_path="$REVO_REPOS_DIR/$path"
+
+        # Run auto-detection on cloned repos
+        scan_reset
+        if [[ -d "$full_path" ]]; then
+            scan_repo "$full_path"
+        fi
+
+        # Show repo header with detected info
+        local detected_parts=""
+        if [[ -n "$SCAN_LANG" ]]; then
+            detected_parts="$SCAN_LANG"
+        fi
+        if [[ -n "$SCAN_FRAMEWORK" ]]; then
+            if [[ -n "$detected_parts" ]]; then
+                detected_parts="$detected_parts, $SCAN_FRAMEWORK"
+            else
+                detected_parts="$SCAN_FRAMEWORK"
+            fi
+        fi
+
+        ui_step "$path"
+        if [[ -n "$detected_parts" ]]; then
+            ui_info "$(ui_dim "Detected: $detected_parts")"
+        fi
+
+        # --- Type ---
+        local stored_type="${YAML_REPO_TYPES[$i]:-}"
+        _context_detect_type "$i"
+        local default_type="${stored_type:-$_CONTEXT_AUTO_TYPE}"
+
+        local type_display=""
+        if [[ -n "$default_type" ]]; then
+            type_display=" $(ui_dim "(default: $default_type)")"
+        fi
+
+        ui_info "Type?  $(ui_cyan "1")=frontend  $(ui_cyan "2")=backend  $(ui_cyan "3")=shared  $(ui_cyan "4")=mobile  $(ui_cyan "5")=infra"
+        printf '%s  %s' "$(ui_bar)" "$type_display "
+        local type_input
+        read -r type_input </dev/tty
+
+        local chosen_type="$default_type"
+        case "$type_input" in
+            1|frontend)  chosen_type="frontend" ;;
+            2|backend)   chosen_type="backend" ;;
+            3|shared)    chosen_type="shared" ;;
+            4|mobile)    chosen_type="mobile" ;;
+            5|infra)     chosen_type="infra" ;;
+            "")          ;; # keep default
+            *)           chosen_type="$type_input" ;; # allow custom
+        esac
+        YAML_REPO_TYPES[$i]="$chosen_type"
+
+        # --- Description ---
+        local stored_desc="${YAML_REPO_DESCRIPTIONS[$i]:-}"
+        local default_desc="${stored_desc:-$SCAN_DESCRIPTION}"
+
+        if [[ -n "$default_desc" ]]; then
+            ui_info "Description? $(ui_dim "(enter to keep)")"
+            ui_info "$(ui_dim "Current: $default_desc")"
+        else
+            ui_info "Description?"
+        fi
+        printf '%s  ' "$(ui_bar)"
+        local desc_input
+        read -r desc_input </dev/tty
+
+        if [[ -n "$desc_input" ]]; then
+            YAML_REPO_DESCRIPTIONS[$i]="$desc_input"
+        elif [[ -n "$default_desc" ]]; then
+            YAML_REPO_DESCRIPTIONS[$i]="$default_desc"
+        fi
+
+        # Show summary
+        local summary=""
+        if [[ -n "$chosen_type" ]]; then
+            summary="$chosen_type"
+        fi
+        if [[ -n "${YAML_REPO_DESCRIPTIONS[$i]:-}" ]]; then
+            if [[ -n "$summary" ]]; then
+                summary="$summary — ${YAML_REPO_DESCRIPTIONS[$i]}"
+            else
+                summary="${YAML_REPO_DESCRIPTIONS[$i]}"
+            fi
+        fi
+        ui_step_done "$path" "$summary"
+        ui_bar_line
+    done
+
+    # Save type/description to revo.yaml
+    config_save
+}
+
+# Analyze mode: deep scan each repo and output a structured report to stdout.
+# Designed for Claude Code to read and then generate descriptions from.
+# Does not modify CLAUDE.md or revo.yaml — output only.
+_context_analyze() {
+    printf '# Workspace Scan Report\n'
+    printf '\n'
+    printf 'Generated by `revo context --analyze`. Use this to write better\n'
+    printf 'descriptions in revo.yaml, then run `revo context --auto` to regenerate CLAUDE.md.\n'
+    printf '\n'
+
+    local i
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        local path full_path
+        path=$(yaml_get_path "$i")
+        full_path="$REVO_REPOS_DIR/$path"
+
+        printf '## %s\n\n' "$path"
+
+        # Current stored metadata
+        local stored_type stored_desc
+        stored_type=$(yaml_get_type "$i")
+        stored_desc=$(yaml_get_description "$i")
+        if [[ -n "$stored_type" ]]; then
+            printf '**Current type:** %s\n' "$stored_type"
+        fi
+        if [[ -n "$stored_desc" ]]; then
+            printf '**Current description:** %s\n' "$stored_desc"
+        fi
+
+        if [[ ! -d "$full_path" ]]; then
+            printf '**Status:** not cloned\n\n'
+            continue
+        fi
+
+        scan_repo "$full_path"
+
+        if [[ -n "$SCAN_LANG" ]]; then
+            printf '**Language:** %s\n' "$SCAN_LANG"
+        fi
+        if [[ -n "$SCAN_NAME" ]]; then
+            printf '**Package name:** %s\n' "$SCAN_NAME"
+        fi
+        if [[ -n "$SCAN_FRAMEWORK" ]]; then
+            printf '**Framework:** %s\n' "$SCAN_FRAMEWORK"
+        fi
+        if [[ -n "$SCAN_PKG_DESCRIPTION" ]]; then
+            printf '**Package description:** %s\n' "$SCAN_PKG_DESCRIPTION"
+        fi
+        if [[ -n "$SCAN_ENTRY_POINTS" ]]; then
+            printf '**Entry points:** %s\n' "$SCAN_ENTRY_POINTS"
+        fi
+        if [[ -n "$SCAN_TOP_DIRS" ]]; then
+            printf '**Top-level dirs:** %s\n' "$SCAN_TOP_DIRS"
+        fi
+        if [[ -n "$SCAN_ROUTES" ]]; then
+            printf '**API routes:** %s\n' "$SCAN_ROUTES"
+        fi
+        if [[ $SCAN_HAS_DOCKER -eq 1 ]]; then
+            printf '**Containerized:** yes\n'
+        fi
+        if [[ $SCAN_HAS_CLAUDE_MD -eq 1 ]]; then
+            printf '**Has CLAUDE.md:** yes\n'
+        fi
+
+        # README first line (even if not used as description, useful for analysis)
+        local readme_line=""
+        if [[ -f "$full_path/README.md" ]]; then
+            readme_line=$(_scan_readme_description "$full_path/README.md")
+        elif [[ -f "$full_path/readme.md" ]]; then
+            readme_line=$(_scan_readme_description "$full_path/readme.md")
+        fi
+        if [[ -n "$readme_line" ]] && [[ "$readme_line" != "$SCAN_PKG_DESCRIPTION" ]]; then
+            printf '**README excerpt:** %s\n' "$readme_line"
+        fi
+
+        # Key files that help understand the repo
+        printf '**Key files:**\n'
+        local key_patterns=(
+            "CLAUDE.md" "README.md" "package.json" "go.mod"
+            "pyproject.toml" "Cargo.toml" "Dockerfile"
+            "docker-compose.yml" "docker-compose.yaml"
+            ".env.example" ".env.sample"
+        )
+        local kf
+        for kf in "${key_patterns[@]}"; do
+            if [[ -f "$full_path/$kf" ]]; then
+                printf '  - %s\n' "$kf"
+            fi
+        done
+
+        # Cross-repo references: check if this repo's package.json references
+        # other repos in the workspace by name
+        if [[ -f "$full_path/package.json" ]]; then
+            local j other_name
+            local refs=""
+            for ((j = 0; j < YAML_REPO_COUNT; j++)); do
+                [[ $j -eq $i ]] && continue
+                other_name=$(yaml_get_path "$j")
+                if grep -qF "\"$other_name\"" "$full_path/package.json" 2>/dev/null; then
+                    if [[ -z "$refs" ]]; then
+                        refs="$other_name"
+                    else
+                        refs="$refs, $other_name"
+                    fi
+                fi
+            done
+            if [[ -n "$refs" ]]; then
+                printf '**References other repos:** %s\n' "$refs"
+            fi
+        fi
+
+        printf '\n'
+    done
+
+    printf '%s\n\n' '---'
+    printf '## Next Steps\n\n'
+    printf 'Read the key files above (especially entry points and README) to understand\n'
+    printf 'each repo, then update revo.yaml with accurate `type` and `description`\n'
+    printf 'fields. Run `revo context --auto` to regenerate CLAUDE.md.\n'
+    printf '\n'
+    printf 'Example revo.yaml entry:\n'
+    printf '```yaml\n'
+    printf '  - url: git@github.com:org/widget.git\n'
+    printf '    tags: [frontend]\n'
+    printf '    type: widget\n'
+    printf '    description: "Embeddable chat widget (iframe) that calls the main API"\n'
+    printf '```\n'
+}
+
 cmd_context() {
+    local auto_mode=0
+    local analyze_mode=0
+
     # Parse arguments
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --help|-h)
-                printf 'Usage: revo context\n\n'
+                printf 'Usage: revo context [--auto] [--analyze]\n\n'
                 printf 'Scan repos and regenerate workspace CLAUDE.md with framework,\n'
-                printf 'routes, and dependency order for Claude Code to consume.\n'
+                printf 'routes, and dependency order for Claude Code to consume.\n\n'
+                printf 'Options:\n'
+                printf '  --auto      Skip interactive prompts, use auto-detected values\n'
+                printf '  --analyze   Output a detailed scan report per repo (no file changes).\n'
+                printf '              Read the report, update revo.yaml with type/description,\n'
+                printf '              then run `revo context --auto` to generate CLAUDE.md.\n'
                 return 0
+                ;;
+            --auto)
+                auto_mode=1
+                shift
+                ;;
+            --analyze)
+                analyze_mode=1
+                shift
                 ;;
             *)
                 ui_step_error "Unknown option: $1"
@@ -524,12 +855,27 @@ cmd_context() {
 
     config_require_workspace || return 1
 
+    if [[ $analyze_mode -eq 1 ]]; then
+        _context_analyze
+        return 0
+    fi
+
     ui_intro "Revo - Generate Workspace CLAUDE.md"
 
     if [[ $YAML_REPO_COUNT -eq 0 ]]; then
         ui_step_error "No repositories configured"
         ui_outro_cancel "Nothing to scan"
         return 1
+    fi
+
+    # Non-interactive when stdin is not a terminal (piped/CI)
+    if [[ ! -t 0 ]]; then
+        auto_mode=1
+    fi
+
+    # Interactive mode: ask for type + description per repo
+    if [[ $auto_mode -eq 0 ]]; then
+        _context_interactive
     fi
 
     local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"

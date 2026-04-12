@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash test/test_yaml.sh)",
+      "Bash(bash test/test_config.sh)",
+      "Bash(bash test/test_integration.sh)",
+      "Bash(gh issue:*)",
+      "Bash(bash build.sh)",
+      "Read(//tmp/**)",
+      "Bash(/Users/marcus.salinas/Programming/Personal/revo/dist/revo --version)",
+      "Read(//private/tmp/**)",
+      "Bash(/Users/marcus.salinas/Programming/Personal/revo/dist/revo issue:*)",
+      "Bash(rmdir /Users/marcus.salinas/.claude/skills/closeout)",
+      "Bash(mkdir -p \"/Users/marcus.salinas/.claude/skills/revo:closeout\")",
+      "Bash(bash test/test_db.sh)",
+      "Bash(./build.sh:*)",
+      "Bash(revo --version)",
+      "Bash(/Users/marcus.salinas/Programming/Personal/revo/revo context:*)",
+      "Bash(bash /tmp/test_notty.sh)",
+      "Bash(bash /tmp/test_double_scan.sh)",
+      "Bash(bash /tmp/test_tag_stripping.sh)",
+      "Bash(bash /tmp/test_in_database_reset.sh)",
+      "Bash(bash /tmp/test_printf_dashes.sh)",
+      "Bash(bash /tmp/test_context_printf.sh)",
+      "Bash(bash /tmp/test_traversal.sh)",
+      "Bash(./revo --version)"
+    ]
+  }
+}

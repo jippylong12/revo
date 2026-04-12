@@ -40,6 +40,19 @@ cmd_feature() {
         return 1
     fi
 
+    # Reject path traversal attempts
+    if [[ "$name" == *".."* ]] || [[ "$name" == *"/"* ]]; then
+        ui_step_error "Feature name must not contain '..' or '/'"
+        return 1
+    fi
+
+    # Sanitize for safe use in branch names and file paths
+    name=$(_workspace_sanitize_name "$name")
+    if [[ -z "$name" ]]; then
+        ui_step_error "Feature name is invalid after sanitization"
+        return 1
+    fi
+
     config_require_workspace || return 1
 
     local branch="feature/$name"

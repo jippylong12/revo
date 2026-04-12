@@ -72,12 +72,14 @@ Or via CLI: `revo add <url> --database postgres:myapp_dev`
 
 ### Context generation
 
-`revo init` (on an existing workspace) scans every repo and writes a `CLAUDE.md` that tells Claude:
-- Per-repo: language, framework, API routes, package name, Docker status
-- Dependency order (topological sort from `depends_on`)
+`revo init` scans every repo and writes a `CLAUDE.md` that tells Claude:
+- Per-repo: type, description, language, framework, API routes, Docker status
+- Dependency order (topological sort from `depends_on`, when defined)
 - Active workspaces with paths and database names
 - Active features with links to `.revo/features/*.md`
 - Workflow instructions so Claude knows how to use revo
+
+On first init, revo detects repos and prompts Claude to analyze each one and generate accurate descriptions — or lets you provide your own. Descriptions and types are stored in `revo.yaml` and used in the generated `CLAUDE.md`.
 
 ### Coordinated operations
 
@@ -88,7 +90,6 @@ revo commit "wire up auth endpoint"    # commit all dirty repos
 revo push                              # push all branches
 revo pr "Auth endpoint"                # coordinated PRs via gh CLI
 revo sync --tag backend                # pull latest on backend repos
-revo exec "npm test" --tag frontend    # run tests on frontend repos
 ```
 
 ### Auto-logged feature tracking
@@ -99,7 +100,9 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 
 | Command | Description |
 |---------|-------------|
-| `revo init` | Initialize workspace or regenerate CLAUDE.md (idempotent) |
+| `revo init` | Initialize workspace, detect repos, prompt for descriptions |
+| `revo context [--auto]` | Regenerate CLAUDE.md (interactive by default, `--auto` skips prompts) |
+| `revo context --analyze` | Output detailed per-repo scan report |
 | `revo add <url> [options]` | Add a repo (`--tags`, `--depends-on`, `--database type:name`) |
 | `revo clone [--tag TAG]` | Clone configured repos |
 | `revo feature <name>` | Create feature branch + context file across repos |
@@ -113,7 +116,6 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo sync` | Pull latest changes |
 | `revo branch <name>` | Create branch across repos |
 | `revo checkout <branch>` | Checkout branch across repos |
-| `revo exec "<cmd>"` | Run command in each repo |
 | `revo list` | List configured repos |
 
 All commands accept `--tag TAG` to target a subset of repos.
@@ -127,18 +129,26 @@ workspace:
 repos:
   - url: git@github.com:org/shared-types.git
     tags: [shared]
+    type: "shared"
+    description: "TypeScript type definitions shared across backend and frontend"
   - url: git@github.com:org/backend.git
     tags: [backend, api]
+    type: "backend"
+    description: "Express REST API with PostgreSQL"
     depends_on: [shared-types]
     database:
       type: postgres
       name: myapp_dev
   - url: git@github.com:org/frontend.git
     tags: [frontend]
+    type: "frontend"
+    description: "Next.js dashboard"
     depends_on: [backend]
 defaults:
   branch: main
 ```
+
+`type` and `description` are set during `revo init` (Claude analyzes each repo or you provide them). They drive the generated `CLAUDE.md` context.
 
 ## Credits
 

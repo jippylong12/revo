@@ -355,23 +355,6 @@ test_clone_with_real_repo() {
     fi
 }
 
-test_exec_command() {
-    test_start "revo exec - runs command in repos"
-
-    setup_test_dir
-    echo "exec-test" | $REVO_CMD init > /dev/null 2>&1
-    $REVO_CMD add "https://github.com/octocat/Hello-World.git" > /dev/null 2>&1
-    $REVO_CMD clone > /dev/null 2>&1
-
-    local output
-    output=$($REVO_CMD exec "git log -1 --oneline" 2>&1)
-
-    if echo "$output" | grep -q "Success"; then
-        test_pass
-    else
-        test_fail "exec should show success"
-    fi
-}
 
 test_tag_filtering() {
     test_start "revo --tag filtering"
@@ -442,7 +425,6 @@ test_feature_creates_file
 if ping -c 1 github.com &> /dev/null; then
     printf "\n--- Network Tests ---\n\n"
     test_clone_with_real_repo
-    test_exec_command
 else
     printf "\n--- Skipping network tests (no connectivity) ---\n"
 fi
