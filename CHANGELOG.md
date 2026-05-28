@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.12.0] - 2026-05-28
+## [1.0.0] - 2026-05-28
 
 ### Changed
 - `revo workspace` now skips bulky dependency/cache/build directories such as

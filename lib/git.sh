@@ -8,6 +8,18 @@
 GIT_OUTPUT=""
 GIT_ERROR=""
 
+git_is_repo() {
+    local repo_dir="$1"
+    [[ -d "$repo_dir" ]] || return 1
+    git -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+git_validate_branch_name() {
+    local branch_name="$1"
+    [[ -n "$branch_name" ]] || return 1
+    git check-ref-format --branch "$branch_name" >/dev/null 2>&1
+}
+
 # Clone a repository
 # Usage: git_clone "url" "target_dir"
 # Returns: 0 on success, 1 on failure
@@ -23,7 +35,7 @@ git_clone() {
         return 1
     fi
 
-    if GIT_OUTPUT=$(git clone --progress "$url" "$target" 2>&1); then
+    if GIT_OUTPUT=$(git clone --progress -- "$url" "$target" 2>&1); then
         return 0
     else
         GIT_ERROR="$GIT_OUTPUT"
@@ -41,7 +53,7 @@ git_status() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -81,13 +93,18 @@ git_branch() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
 
+    if ! git_validate_branch_name "$branch_name"; then
+        GIT_ERROR="Invalid branch name: $branch_name"
+        return 1
+    fi
+
     # Check if branch already exists
-    if git -C "$repo_dir" rev-parse --verify "$branch_name" >/dev/null 2>&1; then
+    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch_name"; then
         GIT_ERROR="Branch already exists: $branch_name"
         return 1
     fi
@@ -110,8 +127,13 @@ git_checkout() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
+        return 1
+    fi
+
+    if ! git_validate_branch_name "$branch_name"; then
+        GIT_ERROR="Invalid branch name: $branch_name"
         return 1
     fi
 
@@ -133,7 +155,7 @@ git_pull() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -157,7 +179,7 @@ git_fetch() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -175,25 +197,34 @@ git_fetch() {
 # Sets: GIT_AHEAD, GIT_BEHIND
 GIT_AHEAD=0
 GIT_BEHIND=0
+GIT_HAS_UPSTREAM=0
+GIT_UPSTREAM=""
 
 git_ahead_behind() {
     local repo_dir="$1"
 
     GIT_AHEAD=0
     GIT_BEHIND=0
+    GIT_HAS_UPSTREAM=0
+    GIT_UPSTREAM=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         return 1
     fi
 
     local upstream
     upstream=$(git -C "$repo_dir" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) || return 0
+    GIT_HAS_UPSTREAM=1
+    GIT_UPSTREAM="$upstream"
 
     local counts
-    counts=$(git -C "$repo_dir" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null) || return 0
+    counts=$(git -C "$repo_dir" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null) || {
+        GIT_HAS_UPSTREAM=0
+        GIT_UPSTREAM=""
+        return 0
+    }
 
-    GIT_BEHIND=$(echo "$counts" | cut -f1)
-    GIT_AHEAD=$(echo "$counts" | cut -f2)
+    read -r GIT_BEHIND GIT_AHEAD <<< "$counts"
 
     return 0
 }
@@ -240,8 +271,10 @@ git_branch_exists() {
     local repo_dir="$1"
     local branch_name="$2"
 
-    git -C "$repo_dir" rev-parse --verify "$branch_name" >/dev/null 2>&1 ||
-    git -C "$repo_dir" rev-parse --verify "origin/$branch_name" >/dev/null 2>&1
+    git_validate_branch_name "$branch_name" || return 1
+
+    git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch_name" ||
+    git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$branch_name"
 }
 
 # Stash changes
@@ -294,7 +327,7 @@ git_exec() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi

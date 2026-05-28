@@ -282,6 +282,12 @@ _context_write_file() {
                 else
                     printf -- '- **Database:** %s (%s)\n' "$db_name" "$db_type" >> "$output"
                 fi
+            elif [[ -n "$SCAN_DB_TYPE" ]]; then
+                if [[ -n "$SCAN_DB_NAME" ]]; then
+                    printf -- '- **Database (detected):** %s (%s)\n' "$SCAN_DB_NAME" "$SCAN_DB_TYPE" >> "$output"
+                else
+                    printf -- '- **Database (detected):** %s (name unknown)\n' "$SCAN_DB_TYPE" >> "$output"
+                fi
             fi
         else
             printf -- '- **Status:** not cloned (run `revo clone`)\n' >> "$output"

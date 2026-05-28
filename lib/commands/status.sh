@@ -68,7 +68,9 @@ cmd_status() {
         git_ahead_behind "$full_path"
         local sync_text=""
 
-        if [[ $GIT_AHEAD -gt 0 ]] && [[ $GIT_BEHIND -gt 0 ]]; then
+        if [[ ${GIT_HAS_UPSTREAM:-0} -eq 0 ]]; then
+            sync_text="$(ui_yellow "no upstream")"
+        elif [[ $GIT_AHEAD -gt 0 ]] && [[ $GIT_BEHIND -gt 0 ]]; then
             sync_text="$(ui_yellow "↑$GIT_AHEAD ↓$GIT_BEHIND")"
         elif [[ $GIT_AHEAD -gt 0 ]]; then
             sync_text="$(ui_cyan "↑$GIT_AHEAD")"

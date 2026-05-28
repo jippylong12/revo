@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.12.0"
+REVO_VERSION="1.0.0"
 
 
 # === lib/ui.sh ===
@@ -443,22 +443,26 @@ ui_table_row() {
 
 # Clear line
 ui_clear_line() {
+    [[ -t 1 ]] || return 0
     printf '\r\033[K'
 }
 
 # Move cursor up N lines
 ui_cursor_up() {
+    [[ -t 1 ]] || return 0
     local n="${1:-1}"
     printf '\033[%dA' "$n"
 }
 
 # Hide cursor
 ui_cursor_hide() {
+    [[ -t 1 ]] || return 0
     printf '\033[?25l'
 }
 
 # Show cursor
 ui_cursor_show() {
+    [[ -t 1 ]] || return 0
     printf '\033[?25h'
 }
 
@@ -486,6 +490,90 @@ YAML_REPO_DB_TYPES=()
 YAML_REPO_DB_NAMES=()
 YAML_REPO_TYPES=()
 YAML_REPO_DESCRIPTIONS=()
+
+_yaml_trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+_yaml_parse_scalar() {
+    local value
+    value=$(_yaml_trim "$1")
+
+    case "$value" in
+        \"*)
+            if [[ ! "$value" =~ ^\"(([^\"\\]|\\.)*)\"[[:space:]]*(#.*)?$ ]]; then
+                return 1
+            fi
+            value="${BASH_REMATCH[1]}"
+            value="${value//\\\"/\"}"
+            value="${value//\\\\/\\}"
+            ;;
+        \'*)
+            if [[ ! "$value" =~ ^\'([^\']*)\'[[:space:]]*(#.*)?$ ]]; then
+                return 1
+            fi
+            value="${BASH_REMATCH[1]}"
+            value="${value//\'\'/\'}"
+            ;;
+        *)
+            # Minimal YAML comment support for unquoted scalars.
+            value="${value%% #*}"
+            value=$(_yaml_trim "$value")
+            ;;
+    esac
+
+    printf '%s' "$value"
+}
+
+_yaml_escape_double_quoted() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "$value"
+}
+
+_yaml_parse_inline_list() {
+    local value
+    value=$(_yaml_trim "$1")
+    if [[ "$value" == *"] #"* ]]; then
+        value="${value%%] #*}]"
+    fi
+
+    [[ "$value" == \[*\] ]] || return 1
+
+    value="${value#\[}"
+    value="${value%\]}"
+    value=$(_yaml_trim "$value")
+
+    if [[ -z "$value" ]]; then
+        printf ''
+        return 0
+    fi
+
+    local old_ifs="$IFS"
+    local parts=()
+    IFS=','
+    read -r -a parts <<< "$value"
+    IFS="$old_ifs"
+
+    local item parsed result=""
+    for item in "${parts[@]}"; do
+        parsed=$(_yaml_parse_scalar "$item") || return 1
+        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            return 1
+        fi
+        if [[ -z "$result" ]]; then
+            result="$parsed"
+        else
+            result="$result,$parsed"
+        fi
+    done
+
+    printf '%s' "$result"
+}
 
 yaml_parse() {
     local file="$1"
@@ -538,15 +626,25 @@ yaml_parse() {
         fi
 
         # Parse workspace name (only outside repos/defaults sections)
-        if [[ $in_repos -eq 0 ]] && [[ $in_defaults -eq 0 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*[\"\']?([^\"\']+)[\"\']?$ ]]; then
-            YAML_WORKSPACE_NAME="${BASH_REMATCH[1]}"
+        if [[ $in_repos -eq 0 ]] && [[ $in_defaults -eq 0 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*(.*)$ ]]; then
+            local workspace_name
+            if ! workspace_name=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                printf 'Error: invalid workspace name\n' >&2
+                return 1
+            fi
+            YAML_WORKSPACE_NAME="$workspace_name"
             continue
         fi
 
         # Parse defaults section
         if [[ $in_defaults -eq 1 ]]; then
             if [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
-                YAML_DEFAULTS_BRANCH="${BASH_REMATCH[1]}"
+                local default_branch
+                if ! default_branch=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid defaults branch\n' >&2
+                    return 1
+                fi
+                YAML_DEFAULTS_BRANCH="$default_branch"
             fi
             continue
         fi
@@ -556,7 +654,11 @@ yaml_parse() {
             # New repo entry (starts with -)
             if [[ "$trimmed" =~ ^-[[:space:]]*url:[[:space:]]*(.+)$ ]]; then
                 current_index=$((current_index + 1))
-                local url="${BASH_REMATCH[1]}"
+                local url
+                if ! url=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid repo url\n' >&2
+                    return 1
+                fi
                 YAML_REPO_URLS[$current_index]="$url"
                 YAML_REPO_PATHS[$current_index]=$(yaml_path_from_url "$url")
                 YAML_REPO_TAGS[$current_index]=""
@@ -574,46 +676,55 @@ yaml_parse() {
             # Continuation of current repo
             if [[ $current_index -ge 0 ]]; then
                 if [[ "$trimmed" =~ ^path:[[:space:]]*(.+)$ ]]; then
-                    YAML_REPO_PATHS[$current_index]="${BASH_REMATCH[1]}"
-                elif [[ "$trimmed" =~ ^tags:[[:space:]]*\[([^\]]*)\]$ ]]; then
-                    # Parse inline array: [tag1, tag2]
-                    local tags_str="${BASH_REMATCH[1]}"
-                    # Remove spaces and quotes
-                    tags_str="${tags_str//[[:space:]]/}"
-                    tags_str="${tags_str//\"/}"
-                    tags_str="${tags_str//\'/}"
+                    local path_val
+                    if ! path_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo path scalar\n' >&2
+                        return 1
+                    fi
+                    YAML_REPO_PATHS[$current_index]="$path_val"
+                elif [[ "$trimmed" =~ ^tags:[[:space:]]*(.*)$ ]]; then
+                    local tags_str
+                    if ! tags_str=$(_yaml_parse_inline_list "${trimmed#tags:}"); then
+                        printf 'Error: invalid tags list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_TAGS[$current_index]="$tags_str"
-                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*\[([^\]]*)\]$ ]]; then
-                    # Parse inline array: [name1, name2]
-                    local deps_str="${BASH_REMATCH[1]}"
-                    deps_str="${deps_str//[[:space:]]/}"
-                    deps_str="${deps_str//\"/}"
-                    deps_str="${deps_str//\'/}"
+                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*(.*)$ ]]; then
+                    local deps_str
+                    if ! deps_str=$(_yaml_parse_inline_list "${trimmed#depends_on:}"); then
+                        printf 'Error: invalid depends_on list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_DEPS[$current_index]="$deps_str"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
-                    YAML_REPO_BRANCHES[$current_index]="${BASH_REMATCH[1]}"
+                    local branch_val
+                    if ! branch_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo branch for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_BRANCHES[$current_index]="$branch_val"
                 elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
-                    local type_val="${BASH_REMATCH[1]}"
-                    # Strip surrounding quotes
-                    type_val="${type_val#\"}"
-                    type_val="${type_val%\"}"
-                    type_val="${type_val#\'}"
-                    type_val="${type_val%\'}"
+                    local type_val
+                    if ! type_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo type for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_TYPES[$current_index]="$type_val"
                 elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^description:[[:space:]]*(.*) ]]; then
-                    local desc="${BASH_REMATCH[1]}"
-                    # Strip surrounding quotes
-                    desc="${desc#\"}"
-                    desc="${desc%\"}"
-                    desc="${desc#\'}"
-                    desc="${desc%\'}"
-                    # Unescape embedded quotes
-                    desc="${desc//\\\"/\"}"
+                    local desc
+                    if ! desc=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo description for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_DESCRIPTIONS[$current_index]="$desc"
                 elif [[ "$trimmed" == "database:" ]]; then
                     in_database=1
                 elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
-                    local db_type_val="${BASH_REMATCH[1]}"
+                    local db_type_val
+                    if ! db_type_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Warning: invalid database type scalar, ignoring\n' >&2
+                        continue
+                    fi
                     case "$db_type_val" in
                         postgres|mongodb|mysql)
                             YAML_REPO_DB_TYPES[$current_index]="$db_type_val"
@@ -623,7 +734,11 @@ yaml_parse() {
                             ;;
                     esac
                 elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*(.+)$ ]]; then
-                    local db_name_val="${BASH_REMATCH[1]}"
+                    local db_name_val
+                    if ! db_name_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Warning: invalid database name scalar, ignoring\n' >&2
+                        continue
+                    fi
                     if [[ "$db_name_val" =~ ^[a-zA-Z0-9_-]+$ ]]; then
                         YAML_REPO_DB_NAMES[$current_index]="$db_name_val"
                     else
@@ -633,6 +748,46 @@ yaml_parse() {
             fi
         fi
     done < "$file"
+
+    local i j
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        if ! yaml_validate_repo_path "${YAML_REPO_PATHS[$i]}"; then
+            printf 'Error: invalid repo path for %s: %s\n' "${YAML_REPO_URLS[$i]}" "${YAML_REPO_PATHS[$i]}" >&2
+            return 1
+        fi
+        for ((j = 0; j < i; j++)); do
+            if [[ "${YAML_REPO_PATHS[$i]}" == "${YAML_REPO_PATHS[$j]}" ]]; then
+                printf 'Error: duplicate repo path: %s\n' "${YAML_REPO_PATHS[$i]}" >&2
+                return 1
+            fi
+        done
+    done
+
+    return 0
+}
+
+# Validate repo paths before they are joined under repos/ or .revo/workspaces/.
+# Paths are relative POSIX-style paths; traversal, absolute paths, empty
+# components, and shell-hostile characters are rejected.
+yaml_validate_repo_path() {
+    local path="$1"
+
+    [[ -z "$path" ]] && return 1
+    [[ "$path" == /* ]] && return 1
+    [[ "$path" == */ ]] && return 1
+    [[ "$path" == *"//"* ]] && return 1
+    [[ "$path" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+
+    local old_ifs="$IFS"
+    local part
+    IFS='/'
+    for part in $path; do
+        if [[ -z "$part" ]] || [[ "$part" == "." ]] || [[ "$part" == ".." ]]; then
+            IFS="$old_ifs"
+            return 1
+        fi
+    done
+    IFS="$old_ifs"
 
     return 0
 }
@@ -759,7 +914,9 @@ yaml_write() {
     {
         printf 'version: 1\n\n'
         printf 'workspace:\n'
-        printf '  name: "%s"\n\n' "$YAML_WORKSPACE_NAME"
+        local escaped_workspace
+        escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
+        printf '  name: "%s"\n\n' "$escaped_workspace"
         printf 'repos:\n'
 
         for ((i = 0; i < YAML_REPO_COUNT; i++)); do
@@ -786,13 +943,14 @@ yaml_write() {
             # Write type if present (quoted for safety)
             local type="${YAML_REPO_TYPES[$i]:-}"
             if [[ -n "$type" ]]; then
+                type=$(_yaml_escape_double_quoted "$type")
                 printf '    type: "%s"\n' "$type"
             fi
 
             # Write description if present (escape embedded quotes)
             local desc="${YAML_REPO_DESCRIPTIONS[$i]:-}"
             if [[ -n "$desc" ]]; then
-                desc="${desc//\"/\\\"}"
+                desc=$(_yaml_escape_double_quoted "$desc")
                 printf '    description: "%s"\n' "$desc"
             fi
 
@@ -867,31 +1025,82 @@ REVO_REPOS_DIR=""
 # holds the workspace name in that case (empty otherwise).
 REVO_ACTIVE_WORKSPACE=""
 
+_config_physical_dir() {
+    local dir="$1"
+    local physical
+    if physical=$(cd "$dir" 2>/dev/null && pwd -P); then
+        printf '%s' "$physical"
+    else
+        printf '%s' "$dir"
+    fi
+}
+
+_config_start_is_in_workspace() {
+    local start_dir="$1"
+    local root="$2"
+    local prefix="$root/.revo/workspaces/"
+
+    case "$start_dir/" in
+        "$prefix"*)
+            local rest="${start_dir#"$prefix"}"
+            local ws_name="${rest%%/*}"
+            [[ -n "$ws_name" ]] && [[ -d "$prefix$ws_name" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+_config_use_root() {
+    local root="$1"
+    local config_file="$2"
+    local start_dir="$3"
+
+    REVO_WORKSPACE_ROOT="$root"
+    REVO_CONFIG_FILE="$config_file"
+    REVO_REPOS_DIR="$root/repos"
+    _config_apply_workspace_override "$start_dir"
+}
+
 # Find workspace root by searching upward for revo.yaml (or mars.yaml as fallback)
 # Usage: config_find_root [start_dir]
 # Returns: 0 if found (sets REVO_WORKSPACE_ROOT), 1 if not found
 config_find_root() {
-    local start_dir="${1:-$PWD}"
+    local start_dir
+    start_dir=$(_config_physical_dir "${1:-$PWD}")
     local current="$start_dir"
+    local first_root=""
+    local first_config=""
 
     while [[ "$current" != "/" ]]; do
+        local candidate_config=""
         if [[ -f "$current/revo.yaml" ]]; then
-            REVO_WORKSPACE_ROOT="$current"
-            REVO_CONFIG_FILE="$current/revo.yaml"
-            REVO_REPOS_DIR="$current/repos"
-            _config_apply_workspace_override "$start_dir"
-            return 0
+            candidate_config="$current/revo.yaml"
+        elif [[ -f "$current/mars.yaml" ]]; then
+            # Fallback: support mars.yaml for migration from Mars
+            candidate_config="$current/mars.yaml"
         fi
-        # Fallback: support mars.yaml for migration from Mars
-        if [[ -f "$current/mars.yaml" ]]; then
-            REVO_WORKSPACE_ROOT="$current"
-            REVO_CONFIG_FILE="$current/mars.yaml"
-            REVO_REPOS_DIR="$current/repos"
-            _config_apply_workspace_override "$start_dir"
-            return 0
+
+        if [[ -n "$candidate_config" ]]; then
+            if _config_start_is_in_workspace "$start_dir" "$current"; then
+                _config_use_root "$current" "$candidate_config" "$start_dir"
+                return 0
+            fi
+
+            if [[ -z "$first_root" ]]; then
+                first_root="$current"
+                first_config="$candidate_config"
+            fi
         fi
+
         current="$(dirname "$current")"
     done
+
+    if [[ -n "$first_root" ]]; then
+        _config_use_root "$first_root" "$first_config" "$start_dir"
+        return 0
+    fi
 
     return 1
 }
@@ -1086,7 +1295,8 @@ config_require_workspace() {
 # Usage: if config_is_in_workspace "/some/path"; then ...
 config_is_in_workspace() {
     local path="$1"
-    [[ "$path" == "$REVO_WORKSPACE_ROOT"* ]]
+    local root="$REVO_WORKSPACE_ROOT"
+    [[ "$path" == "$root" ]] || [[ "$path" == "$root/"* ]]
 }
 
 # Get workspace name
@@ -1123,6 +1333,18 @@ config_repo_default_branch() {
 GIT_OUTPUT=""
 GIT_ERROR=""
 
+git_is_repo() {
+    local repo_dir="$1"
+    [[ -d "$repo_dir" ]] || return 1
+    git -C "$repo_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1
+}
+
+git_validate_branch_name() {
+    local branch_name="$1"
+    [[ -n "$branch_name" ]] || return 1
+    git check-ref-format --branch "$branch_name" >/dev/null 2>&1
+}
+
 # Clone a repository
 # Usage: git_clone "url" "target_dir"
 # Returns: 0 on success, 1 on failure
@@ -1138,7 +1360,7 @@ git_clone() {
         return 1
     fi
 
-    if GIT_OUTPUT=$(git clone --progress "$url" "$target" 2>&1); then
+    if GIT_OUTPUT=$(git clone --progress -- "$url" "$target" 2>&1); then
         return 0
     else
         GIT_ERROR="$GIT_OUTPUT"
@@ -1156,7 +1378,7 @@ git_status() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -1196,13 +1418,18 @@ git_branch() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
 
+    if ! git_validate_branch_name "$branch_name"; then
+        GIT_ERROR="Invalid branch name: $branch_name"
+        return 1
+    fi
+
     # Check if branch already exists
-    if git -C "$repo_dir" rev-parse --verify "$branch_name" >/dev/null 2>&1; then
+    if git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch_name"; then
         GIT_ERROR="Branch already exists: $branch_name"
         return 1
     fi
@@ -1225,8 +1452,13 @@ git_checkout() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
+        return 1
+    fi
+
+    if ! git_validate_branch_name "$branch_name"; then
+        GIT_ERROR="Invalid branch name: $branch_name"
         return 1
     fi
 
@@ -1248,7 +1480,7 @@ git_pull() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -1272,7 +1504,7 @@ git_fetch() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -1290,25 +1522,34 @@ git_fetch() {
 # Sets: GIT_AHEAD, GIT_BEHIND
 GIT_AHEAD=0
 GIT_BEHIND=0
+GIT_HAS_UPSTREAM=0
+GIT_UPSTREAM=""
 
 git_ahead_behind() {
     local repo_dir="$1"
 
     GIT_AHEAD=0
     GIT_BEHIND=0
+    GIT_HAS_UPSTREAM=0
+    GIT_UPSTREAM=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         return 1
     fi
 
     local upstream
     upstream=$(git -C "$repo_dir" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null) || return 0
+    GIT_HAS_UPSTREAM=1
+    GIT_UPSTREAM="$upstream"
 
     local counts
-    counts=$(git -C "$repo_dir" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null) || return 0
+    counts=$(git -C "$repo_dir" rev-list --left-right --count "$upstream...HEAD" 2>/dev/null) || {
+        GIT_HAS_UPSTREAM=0
+        GIT_UPSTREAM=""
+        return 0
+    }
 
-    GIT_BEHIND=$(echo "$counts" | cut -f1)
-    GIT_AHEAD=$(echo "$counts" | cut -f2)
+    read -r GIT_BEHIND GIT_AHEAD <<< "$counts"
 
     return 0
 }
@@ -1355,8 +1596,10 @@ git_branch_exists() {
     local repo_dir="$1"
     local branch_name="$2"
 
-    git -C "$repo_dir" rev-parse --verify "$branch_name" >/dev/null 2>&1 ||
-    git -C "$repo_dir" rev-parse --verify "origin/$branch_name" >/dev/null 2>&1
+    git_validate_branch_name "$branch_name" || return 1
+
+    git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch_name" ||
+    git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$branch_name"
 }
 
 # Stash changes
@@ -1409,7 +1652,7 @@ git_exec() {
     GIT_OUTPUT=""
     GIT_ERROR=""
 
-    if [[ ! -d "$repo_dir/.git" ]]; then
+    if ! git_is_repo "$repo_dir"; then
         GIT_ERROR="Not a git repository: $repo_dir"
         return 1
     fi
@@ -1484,40 +1727,49 @@ _scan_pkg_has_dep() {
     grep -qF "\"$dep\"" "$file" 2>/dev/null
 }
 
+_scan_text_has_dep() {
+    local text="$1"
+    local dep="$2"
+    [[ "$text" == *"\"$dep\""* ]]
+}
+
 # Detect framework from package.json dependencies
 _scan_node_framework() {
     local file="$1"
-    if _scan_pkg_has_dep "$file" "next"; then
+    local pkg_text
+    pkg_text=$(tr '\n' ' ' < "$file" 2>/dev/null || true)
+
+    if _scan_text_has_dep "$pkg_text" "next"; then
         printf 'Next.js'
-    elif _scan_pkg_has_dep "$file" "nuxt"; then
+    elif _scan_text_has_dep "$pkg_text" "nuxt"; then
         printf 'Nuxt'
-    elif _scan_pkg_has_dep "$file" "@remix-run/react"; then
+    elif _scan_text_has_dep "$pkg_text" "@remix-run/react"; then
         printf 'Remix'
-    elif _scan_pkg_has_dep "$file" "@sveltejs/kit"; then
+    elif _scan_text_has_dep "$pkg_text" "@sveltejs/kit"; then
         printf 'SvelteKit'
-    elif _scan_pkg_has_dep "$file" "astro"; then
+    elif _scan_text_has_dep "$pkg_text" "astro"; then
         printf 'Astro'
-    elif _scan_pkg_has_dep "$file" "expo"; then
+    elif _scan_text_has_dep "$pkg_text" "expo"; then
         printf 'Expo (React Native)'
-    elif _scan_pkg_has_dep "$file" "react-native"; then
+    elif _scan_text_has_dep "$pkg_text" "react-native"; then
         printf 'React Native'
-    elif _scan_pkg_has_dep "$file" "vite"; then
+    elif _scan_text_has_dep "$pkg_text" "vite"; then
         printf 'Vite'
-    elif _scan_pkg_has_dep "$file" "nestjs" || _scan_pkg_has_dep "$file" "@nestjs/core"; then
+    elif _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "@nestjs/core"; then
         printf 'NestJS'
-    elif _scan_pkg_has_dep "$file" "fastify"; then
+    elif _scan_text_has_dep "$pkg_text" "fastify"; then
         printf 'Fastify'
-    elif _scan_pkg_has_dep "$file" "express"; then
+    elif _scan_text_has_dep "$pkg_text" "express"; then
         printf 'Express'
-    elif _scan_pkg_has_dep "$file" "hono"; then
+    elif _scan_text_has_dep "$pkg_text" "hono"; then
         printf 'Hono'
-    elif _scan_pkg_has_dep "$file" "@angular/core"; then
+    elif _scan_text_has_dep "$pkg_text" "@angular/core"; then
         printf 'Angular'
-    elif _scan_pkg_has_dep "$file" "react"; then
+    elif _scan_text_has_dep "$pkg_text" "react"; then
         printf 'React'
-    elif _scan_pkg_has_dep "$file" "vue"; then
+    elif _scan_text_has_dep "$pkg_text" "vue"; then
         printf 'Vue'
-    elif _scan_pkg_has_dep "$file" "svelte"; then
+    elif _scan_text_has_dep "$pkg_text" "svelte"; then
         printf 'Svelte'
     fi
 }
@@ -1814,7 +2066,9 @@ _scan_db_rails() {
 _scan_db_django() {
     local repo_dir="$1"
     local file
-    file=$(find "$repo_dir" -maxdepth 3 -type f -name 'settings.py' 2>/dev/null | head -1)
+    file=$(find "$repo_dir" -maxdepth 3 \
+        \( -type d \( -name '.git' -o -name 'node_modules' -o -name 'vendor' -o -name 'dist' -o -name 'build' -o -name '.next' -o -name '__pycache__' -o -name '.venv' -o -name 'venv' -o -name 'env' -o -name 'coverage' \) -prune \) -o \
+        \( -type f -name 'settings.py' -print -quit \) 2>/dev/null)
     [[ -z "$file" ]] && return
 
     local engine=""
@@ -2092,12 +2346,24 @@ _db_workspace_name() {
     local ws_name="$2"
     local suffix
     suffix=$(_db_sanitize_ws_suffix "$ws_name")
-    local full="${source}_ws_${suffix}"
-    # Truncate to 63 chars (PostgreSQL limit) preserving the _ws_ marker
-    if [[ ${#full} -gt 63 ]]; then
-        full="${full:0:63}"
+    [[ -z "$suffix" ]] && suffix="workspace"
+
+    local marker="_ws_"
+    local max_suffix=$((63 - ${#marker} - 1))
+    if [[ ${#suffix} -gt $max_suffix ]]; then
+        suffix="${suffix:0:$max_suffix}"
     fi
-    printf '%s' "$full"
+
+    local max_source=$((63 - ${#marker} - ${#suffix}))
+    if [[ $max_source -lt 1 ]]; then
+        max_source=1
+    fi
+
+    if [[ ${#source} -gt $max_source ]]; then
+        source="${source:0:$max_source}"
+    fi
+
+    printf '%s%s%s' "$source" "$marker" "$suffix"
 }
 
 # Check that the required CLI tool is available
@@ -2136,6 +2402,33 @@ _db_check_tool() {
     return 0
 }
 
+_db_check_clone_tools() {
+    local db_type="$1"
+
+    _db_check_tool "$db_type" || return 1
+
+    case "$db_type" in
+        postgres)
+            if ! command -v createdb >/dev/null 2>&1 || ! command -v pg_dump >/dev/null 2>&1 || ! command -v dropdb >/dev/null 2>&1; then
+                DB_ERROR="PostgreSQL clone tools not found. Install PostgreSQL CLI tools (createdb, pg_dump, dropdb)"
+                return 1
+            fi
+            ;;
+        mongodb)
+            if ! command -v mongorestore >/dev/null 2>&1; then
+                DB_ERROR="mongorestore not found. Install MongoDB Database Tools (e.g., brew install mongodb-database-tools)"
+                return 1
+            fi
+            ;;
+        mysql)
+            if ! command -v mysqldump >/dev/null 2>&1 || ! command -v mysqladmin >/dev/null 2>&1; then
+                DB_ERROR="MySQL clone tools not found. Install MySQL CLI tools (mysqldump, mysqladmin)"
+                return 1
+            fi
+            ;;
+    esac
+}
+
 # Clone a database
 # Usage: _db_clone "postgres" "source_db" "target_db"
 _db_clone() {
@@ -2148,7 +2441,7 @@ _db_clone() {
 
     _db_validate_name "$source" || return 1
     _db_validate_name "$target" || return 1
-    _db_check_tool "$db_type" || return 1
+    _db_check_clone_tools "$db_type" || return 1
 
     case "$db_type" in
         postgres)
@@ -2205,14 +2498,13 @@ _db_clone() {
             # Use temp dump file (avoids partial state from broken pipes)
             local dump_file
             dump_file=$(mktemp -t revo-mysqldump.XXXXXX)
-            if ! mysqladmin create "$target" </dev/null 2>/dev/null; then
-                DB_ERROR="Failed to create mysql database: $target"
+            if ! mysqldump "$source" > "$dump_file" 2>/dev/null; then
+                DB_ERROR="Failed to dump mysql database: $source"
                 rm -f "$dump_file"
                 return 1
             fi
-            if ! mysqldump "$source" > "$dump_file" 2>/dev/null; then
-                DB_ERROR="Failed to dump mysql database: $source"
-                mysqladmin -f drop "$target" </dev/null 2>/dev/null
+            if ! mysqladmin create "$target" </dev/null 2>/dev/null; then
+                DB_ERROR="Failed to create mysql database: $target"
                 rm -f "$dump_file"
                 return 1
             fi
@@ -2328,11 +2620,19 @@ _init_auto_tags() {
 
     # Mobile/frontend signals from package.json (only if no backend signal yet)
     if [[ -z "$category" ]] && [[ -f "$dir/package.json" ]]; then
-        if grep -qE '"(react-native|expo)"' "$dir/package.json" 2>/dev/null; then
+        local pkg_text
+        pkg_text=$(tr '\n' ' ' < "$dir/package.json" 2>/dev/null || true)
+        if _scan_text_has_dep "$pkg_text" "react-native" || _scan_text_has_dep "$pkg_text" "expo"; then
             category="mobile"
-        elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$dir/package.json" 2>/dev/null; then
+        elif _scan_text_has_dep "$pkg_text" "express" || _scan_text_has_dep "$pkg_text" "fastify" \
+            || _scan_text_has_dep "$pkg_text" "hono" || _scan_text_has_dep "$pkg_text" "@nestjs/core" \
+            || _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "koa"; then
             category="backend"
-        elif grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit)"' "$dir/package.json" 2>/dev/null; then
+        elif _scan_text_has_dep "$pkg_text" "next" || _scan_text_has_dep "$pkg_text" "nuxt" \
+            || _scan_text_has_dep "$pkg_text" "react" || _scan_text_has_dep "$pkg_text" "vue" \
+            || _scan_text_has_dep "$pkg_text" "svelte" || _scan_text_has_dep "$pkg_text" "@angular/core" \
+            || _scan_text_has_dep "$pkg_text" "astro" || _scan_text_has_dep "$pkg_text" "@remix-run/react" \
+            || _scan_text_has_dep "$pkg_text" "@sveltejs/kit"; then
             category="frontend"
         fi
     fi
@@ -2671,9 +2971,18 @@ cmd_detect() {
         # Auto-categorize from package contents.
         category=""
         if [[ -f "$d/package.json" ]]; then
-            if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$d/package.json" 2>/dev/null; then
+            local pkg_text
+            pkg_text=$(tr '\n' ' ' < "$d/package.json" 2>/dev/null || true)
+            if _scan_text_has_dep "$pkg_text" "next" || _scan_text_has_dep "$pkg_text" "nuxt" \
+                || _scan_text_has_dep "$pkg_text" "react" || _scan_text_has_dep "$pkg_text" "vue" \
+                || _scan_text_has_dep "$pkg_text" "svelte" || _scan_text_has_dep "$pkg_text" "@angular/core" \
+                || _scan_text_has_dep "$pkg_text" "astro" || _scan_text_has_dep "$pkg_text" "@remix-run/react" \
+                || _scan_text_has_dep "$pkg_text" "@sveltejs/kit" || _scan_text_has_dep "$pkg_text" "expo" \
+                || _scan_text_has_dep "$pkg_text" "react-native"; then
                 category="frontend"
-            elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$d/package.json" 2>/dev/null; then
+            elif _scan_text_has_dep "$pkg_text" "express" || _scan_text_has_dep "$pkg_text" "fastify" \
+                || _scan_text_has_dep "$pkg_text" "hono" || _scan_text_has_dep "$pkg_text" "@nestjs/core" \
+                || _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "koa"; then
                 category="backend"
             fi
         elif [[ -f "$d/go.mod" ]] || [[ -f "$d/Cargo.toml" ]] || [[ -f "$d/pom.xml" ]] || [[ -f "$d/build.gradle" ]] || [[ -f "$d/build.gradle.kts" ]]; then
@@ -2824,7 +3133,7 @@ cmd_clone() {
         ui_spinner_start "Cloning $path... ($current/$total)"
 
         local clone_err
-        if clone_err=$(git clone --quiet "$url" "$full_path" 2>&1); then
+        if clone_err=$(git clone --quiet -- "$url" "$full_path" 2>&1); then
             ui_spinner_stop
             # Detect and store the repo's default branch
             local detected_branch
@@ -2939,7 +3248,9 @@ cmd_status() {
         git_ahead_behind "$full_path"
         local sync_text=""
 
-        if [[ $GIT_AHEAD -gt 0 ]] && [[ $GIT_BEHIND -gt 0 ]]; then
+        if [[ ${GIT_HAS_UPSTREAM:-0} -eq 0 ]]; then
+            sync_text="$(ui_yellow "no upstream")"
+        elif [[ $GIT_AHEAD -gt 0 ]] && [[ $GIT_BEHIND -gt 0 ]]; then
             sync_text="$(ui_yellow "↑$GIT_AHEAD ↓$GIT_BEHIND")"
         elif [[ $GIT_AHEAD -gt 0 ]]; then
             sync_text="$(ui_cyan "↑$GIT_AHEAD")"
@@ -3295,126 +3606,6 @@ cmd_sync() {
     return 0
 }
 
-# === lib/commands/exec.sh ===
-# Revo CLI - exec command
-# Run command in each repository
-
-cmd_exec() {
-    local command=""
-    local tag=""
-    local quiet=0
-
-    # Parse arguments
-    while [[ $# -gt 0 ]]; do
-        case "$1" in
-            --tag)
-                [[ $# -lt 2 ]] && { ui_step_error "Option --tag requires a value"; return 1; }
-                tag="$2"
-                shift 2
-                ;;
-            --quiet|-q)
-                quiet=1
-                shift
-                ;;
-            --)
-                shift
-                command="$*"
-                break
-                ;;
-            -*)
-                ui_step_error "Unknown option: $1"
-                return 1
-                ;;
-            *)
-                if [[ -z "$command" ]]; then
-                    command="$1"
-                else
-                    ui_step_error "Unexpected argument: $1"
-                    return 1
-                fi
-                shift
-                ;;
-        esac
-    done
-
-    if [[ -z "$command" ]]; then
-        ui_step_error "Usage: revo exec \"<command>\" [--tag TAG]"
-        return 1
-    fi
-
-    config_require_workspace || return 1
-
-    ui_intro "Revo - Execute: $command"
-
-    local repos
-    repos=$(config_get_repos "$tag")
-
-    if [[ -z "$repos" ]]; then
-        ui_step_error "No repositories configured"
-        ui_outro_cancel "Nothing to do"
-        return 1
-    fi
-
-    local success_count=0
-    local skip_count=0
-    local fail_count=0
-
-    while IFS= read -r repo; do
-        [[ -z "$repo" ]] && continue
-
-        local path
-        path=$(yaml_get_path "$repo")
-        local full_path="$REVO_REPOS_DIR/$path"
-
-        if [[ ! -d "$full_path" ]]; then
-            ui_step_done "Skipped (not cloned):" "$path"
-            skip_count=$((skip_count + 1))
-            continue
-        fi
-
-        ui_step "Running in: $path"
-        ui_bar_line
-
-        # Execute command in repo directory
-        local output
-        local exit_code
-
-        if output=$(cd "$full_path" && bash -c "$command" 2>&1); then
-            exit_code=0
-        else
-            exit_code=$?
-        fi
-
-        # Show output if not quiet
-        if [[ $quiet -eq 0 ]] && [[ -n "$output" ]]; then
-            while IFS= read -r line; do
-                printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "$line")"
-            done <<< "$output"
-        fi
-
-        if [[ $exit_code -eq 0 ]]; then
-            ui_step_done "Success:" "$path"
-            success_count=$((success_count + 1))
-        else
-            ui_step_error "Failed (exit $exit_code): $path"
-            fail_count=$((fail_count + 1))
-        fi
-
-        ui_bar_line
-    done <<< "$repos"
-
-    if [[ $fail_count -eq 0 ]]; then
-        local msg="Executed on $success_count repo(s)"
-        [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
-        ui_outro "$msg"
-    else
-        ui_outro_cancel "$success_count succeeded, $fail_count failed"
-        return 1
-    fi
-
-    return 0
-}
-
 # === lib/commands/add.sh ===
 # Revo CLI - add command
 # Add a repository to the workspace configuration
@@ -3486,6 +3677,12 @@ cmd_add() {
     # Derive path from URL if not provided
     if [[ -z "$path" ]]; then
         path=$(yaml_path_from_url "$url")
+    fi
+
+    if ! yaml_validate_repo_path "$path"; then
+        ui_step_error "Invalid repo path: $path"
+        ui_info "$(ui_dim "Use a relative path with letters, numbers, dot, underscore, hyphen, or slash; traversal is not allowed.")"
+        return 1
     fi
 
     # Check if repo already exists
@@ -3903,6 +4100,12 @@ _context_write_file() {
                     printf -- '- **Database (workspace):** %s (%s)\n' "$ws_db" "$db_type" >> "$output"
                 else
                     printf -- '- **Database:** %s (%s)\n' "$db_name" "$db_type" >> "$output"
+                fi
+            elif [[ -n "$SCAN_DB_TYPE" ]]; then
+                if [[ -n "$SCAN_DB_NAME" ]]; then
+                    printf -- '- **Database (detected):** %s (%s)\n' "$SCAN_DB_NAME" "$SCAN_DB_TYPE" >> "$output"
+                else
+                    printf -- '- **Database (detected):** %s (name unknown)\n' "$SCAN_DB_TYPE" >> "$output"
                 fi
             fi
         else
@@ -5070,12 +5273,8 @@ cmd_pr() {
 
         # Skip if no commits ahead of upstream (push required first)
         git_ahead_behind "$full_path"
-        local has_upstream=0
-        if git -C "$full_path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
-            has_upstream=1
-        fi
 
-        if [[ $has_upstream -eq 1 ]] && [[ $GIT_AHEAD -eq 0 ]]; then
+        if [[ ${GIT_HAS_UPSTREAM:-0} -eq 1 ]] && [[ $GIT_AHEAD -eq 0 ]]; then
             ui_step_done "Skipped (no changes ahead of upstream):" "$path"
             skip_count=$((skip_count + 1))
             continue
@@ -5275,8 +5474,8 @@ _issue_list_json() {
     shift 3
     local gh_extra=( "$@" )
 
-    local entries=""
     local first=1
+    printf '['
 
     local repo
     while IFS= read -r repo; do
@@ -5298,16 +5497,16 @@ _issue_list_json() {
             while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
                 if [[ $first -eq 1 ]]; then
-                    entries="$line"
+                    printf '%s' "$line"
                     first=0
                 else
-                    entries="$entries,$line"
+                    printf ',%s' "$line"
                 fi
             done <<< "$lines"
         fi
     done <<< "$repos"
 
-    printf '[%s]\n' "$entries"
+    printf ']\n'
     return 0
 }
 
@@ -5342,31 +5541,27 @@ _issue_list_human() {
         ui_bar_line
         ui_step "$path"
 
-        local count_output
-        if ! count_output=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
-            --json number --jq 'length' 2>&1); then
-            ui_step_error "Failed: $count_output"
-            continue
-        fi
-
-        local repo_total="${count_output:-0}"
-        if [[ "$repo_total" == "0" ]]; then
-            printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "No $state issues")"
-            continue
-        fi
-
         local pretty
         if pretty=$(cd "$full_path" && gh issue list \
             --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" 2>&1); then
+            if [[ -z "$pretty" ]]; then
+                printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "No $state issues")"
+                continue
+            fi
+
+            local repo_total=0
             local line
             while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                repo_total=$((repo_total + 1))
                 printf '%s  %s\n' "$(ui_bar)" "$line"
             done <<< "$pretty"
+            total=$((total + repo_total))
+            repo_count=$((repo_count + 1))
+        else
+            ui_step_error "Failed: $pretty"
+            continue
         fi
-
-        total=$((total + repo_total))
-        repo_count=$((repo_count + 1))
     done <<< "$repos"
 
     ui_bar_line
@@ -5631,20 +5826,77 @@ _workspace_verify_gitignore_safe() {
     ' "$gitignore"
 }
 
-# Return 0 if a basename should be excluded from workspace copies.
-_workspace_copy_should_skip() {
-    case "$1" in
-        node_modules|.venv|venv|.gradle|target|.next|.nuxt|__pycache__|.dart_tool|Pods)
-            return 0
-            ;;
-    esac
-    return 1
+# Remove symlinks that can escape the copied repo. Absolute targets and parent
+# traversal are intentionally skipped because workspaces are often committed or
+# inspected by agents and should not expose arbitrary host files through links.
+_workspace_prune_unsafe_symlinks() {
+    local dest="$1"
+    local link target
+
+    while IFS= read -r link; do
+        [[ -z "$link" ]] && continue
+        target=$(readlink "$link" 2>/dev/null || true)
+        if [[ "$target" == /* ]] || [[ "$target" == ".." ]] \
+            || [[ "$target" == "../"* ]] || [[ "$target" == *"/../"* ]]; then
+            rm -f "$link" 2>/dev/null || true
+        fi
+    done < <(find "$dest" -type l 2>/dev/null)
 }
 
-# Copy a source repo into the workspace. Follows symlinks so init-style
-# symlinked repos are materialized as real directories inside the workspace.
-# Bulky dependency/cache/build directories are skipped; reinstall them inside
-# the workspace if a command needs them.
+_workspace_copy_repo_fallback() {
+    local src="$1"
+    local dest="$2"
+
+    mkdir -p "$dest"
+
+    local rel rel_path src_path dest_path
+    while IFS= read -r rel; do
+        [[ -z "$rel" ]] && continue
+        [[ "$rel" == "." ]] && continue
+
+        rel_path="${rel#./}"
+        src_path="$src/$rel_path"
+        dest_path="$dest/$rel_path"
+
+        if [[ -d "$src_path" ]] && [[ ! -L "$src_path" ]]; then
+            mkdir -p "$dest_path" || return 1
+        else
+            mkdir -p "$(dirname "$dest_path")" || return 1
+            cp -Pp "$src_path" "$dest_path" 2>/dev/null || return 1
+        fi
+    done < <(
+        cd "$src" && find . \
+            \( -type d \( \
+                -name node_modules -o \
+                -name .venv -o \
+                -name venv -o \
+                -name .gradle -o \
+                -name target -o \
+                -name .next -o \
+                -name .nuxt -o \
+                -name __pycache__ -o \
+                -name .dart_tool -o \
+                -name Pods -o \
+                -name dist -o \
+                -name build -o \
+                -name coverage -o \
+                -name .cache -o \
+                -name .turbo -o \
+                -name .parcel-cache -o \
+                -name .pytest_cache -o \
+                -name .mypy_cache -o \
+                -name .ruff_cache -o \
+                -name .tox -o \
+                -name .pnpm-store \
+            \) -prune \) -o -print 2>/dev/null
+    )
+}
+
+# Copy a source repo into the workspace. If the source repo path itself is a
+# symlink, the shell expands its contents; symlinks inside the repo are
+# preserved instead of followed so workspace creation does not materialize
+# arbitrary files outside the repo. Bulky dependency/cache/build directories are
+# skipped; reinstall them inside the workspace if a command needs them.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -5655,48 +5907,31 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods"
+    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods dist build coverage .cache .turbo .parcel-cache .pytest_cache .mypy_cache .ruff_cache .tox .pnpm-store"
 
     if command -v rsync >/dev/null 2>&1; then
-        local rsync_args=(-aL)
+        local rsync_args=(-a)
         local excluded
         for excluded in $excludes; do
             rsync_args+=(--exclude "$excluded/")
         done
 
         if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
+            _workspace_prune_unsafe_symlinks "$dest"
             return 0
         fi
 
         rm -rf "$dest" 2>/dev/null
     fi
 
-    mkdir -p "$dest"
+    # Fallback for systems without rsync. Walk the tree with pruning so nested
+    # generated directories are never copied just to be deleted afterward.
+    if ! _workspace_copy_repo_fallback "$src" "$dest"; then
+        rm -rf "$dest" 2>/dev/null
+        return 1
+    fi
 
-    # Fallback for systems without rsync. This skips top-level bulky dirs and
-    # then prunes any nested copies that came along with regular cp.
-    local entry name
-    for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
-        [[ -e "$entry" ]] || continue
-        name=$(basename "$entry")
-        if _workspace_copy_should_skip "$name"; then
-            continue
-        fi
-        cp -RL "$entry" "$dest/" 2>/dev/null || return 1
-    done
-
-    find "$dest" -type d \( \
-        -name node_modules -o \
-        -name .venv -o \
-        -name venv -o \
-        -name .gradle -o \
-        -name target -o \
-        -name .next -o \
-        -name .nuxt -o \
-        -name __pycache__ -o \
-        -name .dart_tool -o \
-        -name Pods \
-    \) -prune -exec rm -rf {} + 2>/dev/null || true
+    _workspace_prune_unsafe_symlinks "$dest"
 
     return 0
 }
@@ -5981,6 +6216,7 @@ _workspace_create() {
                 ui_step_done "Checked out existing:" "$path -> $branch"
             else
                 ui_step_error "Failed to checkout existing branch in: $path"
+                rm -rf "$dest" 2>/dev/null
                 fail_count=$((fail_count + 1))
                 continue
             fi
@@ -5989,6 +6225,7 @@ _workspace_create() {
                 ui_step_done "Branched:" "$path -> $branch"
             else
                 ui_step_error "Failed to create branch in: $path"
+                rm -rf "$dest" 2>/dev/null
                 fail_count=$((fail_count + 1))
                 continue
             fi
@@ -6122,6 +6359,11 @@ _workspace_delete() {
 
     local sanitized
     sanitized=$(_workspace_sanitize_name "$name")
+    if [[ -z "$sanitized" ]]; then
+        ui_step_error "Invalid workspace name: $name"
+        ui_outro_cancel "Aborted"
+        return 1
+    fi
     name="$sanitized"
 
     local ws_dir="$REVO_WORKSPACE_ROOT/.revo/workspaces/$name"

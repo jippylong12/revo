@@ -46,20 +46,77 @@ _workspace_verify_gitignore_safe() {
     ' "$gitignore"
 }
 
-# Return 0 if a basename should be excluded from workspace copies.
-_workspace_copy_should_skip() {
-    case "$1" in
-        node_modules|.venv|venv|.gradle|target|.next|.nuxt|__pycache__|.dart_tool|Pods)
-            return 0
-            ;;
-    esac
-    return 1
+# Remove symlinks that can escape the copied repo. Absolute targets and parent
+# traversal are intentionally skipped because workspaces are often committed or
+# inspected by agents and should not expose arbitrary host files through links.
+_workspace_prune_unsafe_symlinks() {
+    local dest="$1"
+    local link target
+
+    while IFS= read -r link; do
+        [[ -z "$link" ]] && continue
+        target=$(readlink "$link" 2>/dev/null || true)
+        if [[ "$target" == /* ]] || [[ "$target" == ".." ]] \
+            || [[ "$target" == "../"* ]] || [[ "$target" == *"/../"* ]]; then
+            rm -f "$link" 2>/dev/null || true
+        fi
+    done < <(find "$dest" -type l 2>/dev/null)
 }
 
-# Copy a source repo into the workspace. Follows symlinks so init-style
-# symlinked repos are materialized as real directories inside the workspace.
-# Bulky dependency/cache/build directories are skipped; reinstall them inside
-# the workspace if a command needs them.
+_workspace_copy_repo_fallback() {
+    local src="$1"
+    local dest="$2"
+
+    mkdir -p "$dest"
+
+    local rel rel_path src_path dest_path
+    while IFS= read -r rel; do
+        [[ -z "$rel" ]] && continue
+        [[ "$rel" == "." ]] && continue
+
+        rel_path="${rel#./}"
+        src_path="$src/$rel_path"
+        dest_path="$dest/$rel_path"
+
+        if [[ -d "$src_path" ]] && [[ ! -L "$src_path" ]]; then
+            mkdir -p "$dest_path" || return 1
+        else
+            mkdir -p "$(dirname "$dest_path")" || return 1
+            cp -Pp "$src_path" "$dest_path" 2>/dev/null || return 1
+        fi
+    done < <(
+        cd "$src" && find . \
+            \( -type d \( \
+                -name node_modules -o \
+                -name .venv -o \
+                -name venv -o \
+                -name .gradle -o \
+                -name target -o \
+                -name .next -o \
+                -name .nuxt -o \
+                -name __pycache__ -o \
+                -name .dart_tool -o \
+                -name Pods -o \
+                -name dist -o \
+                -name build -o \
+                -name coverage -o \
+                -name .cache -o \
+                -name .turbo -o \
+                -name .parcel-cache -o \
+                -name .pytest_cache -o \
+                -name .mypy_cache -o \
+                -name .ruff_cache -o \
+                -name .tox -o \
+                -name .pnpm-store \
+            \) -prune \) -o -print 2>/dev/null
+    )
+}
+
+# Copy a source repo into the workspace. If the source repo path itself is a
+# symlink, the shell expands its contents; symlinks inside the repo are
+# preserved instead of followed so workspace creation does not materialize
+# arbitrary files outside the repo. Bulky dependency/cache/build directories are
+# skipped; reinstall them inside the workspace if a command needs them.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -70,48 +127,31 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods"
+    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods dist build coverage .cache .turbo .parcel-cache .pytest_cache .mypy_cache .ruff_cache .tox .pnpm-store"
 
     if command -v rsync >/dev/null 2>&1; then
-        local rsync_args=(-aL)
+        local rsync_args=(-a)
         local excluded
         for excluded in $excludes; do
             rsync_args+=(--exclude "$excluded/")
         done
 
         if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
+            _workspace_prune_unsafe_symlinks "$dest"
             return 0
         fi
 
         rm -rf "$dest" 2>/dev/null
     fi
 
-    mkdir -p "$dest"
+    # Fallback for systems without rsync. Walk the tree with pruning so nested
+    # generated directories are never copied just to be deleted afterward.
+    if ! _workspace_copy_repo_fallback "$src" "$dest"; then
+        rm -rf "$dest" 2>/dev/null
+        return 1
+    fi
 
-    # Fallback for systems without rsync. This skips top-level bulky dirs and
-    # then prunes any nested copies that came along with regular cp.
-    local entry name
-    for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
-        [[ -e "$entry" ]] || continue
-        name=$(basename "$entry")
-        if _workspace_copy_should_skip "$name"; then
-            continue
-        fi
-        cp -RL "$entry" "$dest/" 2>/dev/null || return 1
-    done
-
-    find "$dest" -type d \( \
-        -name node_modules -o \
-        -name .venv -o \
-        -name venv -o \
-        -name .gradle -o \
-        -name target -o \
-        -name .next -o \
-        -name .nuxt -o \
-        -name __pycache__ -o \
-        -name .dart_tool -o \
-        -name Pods \
-    \) -prune -exec rm -rf {} + 2>/dev/null || true
+    _workspace_prune_unsafe_symlinks "$dest"
 
     return 0
 }
@@ -396,6 +436,7 @@ _workspace_create() {
                 ui_step_done "Checked out existing:" "$path -> $branch"
             else
                 ui_step_error "Failed to checkout existing branch in: $path"
+                rm -rf "$dest" 2>/dev/null
                 fail_count=$((fail_count + 1))
                 continue
             fi
@@ -404,6 +445,7 @@ _workspace_create() {
                 ui_step_done "Branched:" "$path -> $branch"
             else
                 ui_step_error "Failed to create branch in: $path"
+                rm -rf "$dest" 2>/dev/null
                 fail_count=$((fail_count + 1))
                 continue
             fi
@@ -537,6 +579,11 @@ _workspace_delete() {
 
     local sanitized
     sanitized=$(_workspace_sanitize_name "$name")
+    if [[ -z "$sanitized" ]]; then
+        ui_step_error "Invalid workspace name: $name"
+        ui_outro_cancel "Aborted"
+        return 1
+    fi
     name="$sanitized"
 
     local ws_dir="$REVO_WORKSPACE_ROOT/.revo/workspaces/$name"

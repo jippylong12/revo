@@ -100,6 +100,7 @@ test_config_find_root() {
     local test_dir="/tmp/revo/revo_test_$$"
     local orig_dir="$PWD"
     mkdir -p "$test_dir/repos/subrepo/deep"
+    test_dir=$(cd "$test_dir" && pwd -P)
 
     # Create revo.yaml at root
     echo "version: 1" > "$test_dir/revo.yaml"
@@ -126,6 +127,7 @@ test_config_find_root_mars_fallback() {
     local test_dir="/tmp/revo/revo_test_$$"
     local orig_dir="$PWD"
     mkdir -p "$test_dir/repos/deep"
+    test_dir=$(cd "$test_dir" && pwd -P)
 
     echo "version: 1" > "$test_dir/mars.yaml"
 
@@ -139,6 +141,116 @@ test_config_find_root_mars_fallback() {
         test_pass
     else
         test_fail "config_find_root should have fallen back to mars.yaml"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+}
+
+test_config_find_root_active_workspace_nested_path() {
+    test_start "config_find_root - active workspace nested path override"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    local orig_dir="$PWD"
+    rm -rf "$test_dir"
+    mkdir -p "$test_dir/.revo/workspaces/my-feature/api/lib" "$test_dir/repos/api"
+    test_dir=$(cd "$test_dir" && pwd -P)
+    echo "version: 1" > "$test_dir/revo.yaml"
+
+    cd "$test_dir/.revo/workspaces/my-feature/api/lib"
+
+    if config_find_root; then
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir/.revo/workspaces/my-feature" "$REVO_REPOS_DIR" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "my-feature" "$REVO_ACTIVE_WORKSPACE" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        test_pass
+    else
+        test_fail "config_find_root should have found parent revo.yaml"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+}
+
+test_config_find_root_active_workspace_symlink_path() {
+    test_start "config_find_root - active workspace through symlink"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    local orig_dir="$PWD"
+    rm -rf "$test_dir"
+    mkdir -p "$test_dir/.revo/workspaces/link-feature/api" "$test_dir/repos/api"
+    test_dir=$(cd "$test_dir" && pwd -P)
+    echo "version: 1" > "$test_dir/revo.yaml"
+    ln -s "$test_dir/.revo/workspaces/link-feature" "$test_dir/ws-link"
+
+    cd "$test_dir/ws-link/api"
+
+    if config_find_root; then
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir/.revo/workspaces/link-feature" "$REVO_REPOS_DIR" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "link-feature" "$REVO_ACTIVE_WORKSPACE" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        test_pass
+    else
+        test_fail "config_find_root should have resolved symlinked workspace path"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+}
+
+test_config_find_root_active_workspace_with_child_config() {
+    test_start "config_find_root - active workspace wins over child config"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    local orig_dir="$PWD"
+    rm -rf "$test_dir"
+    mkdir -p "$test_dir/.revo/workspaces/child-config/api/deep" "$test_dir/repos/api"
+    test_dir=$(cd "$test_dir" && pwd -P)
+    echo "version: 1" > "$test_dir/revo.yaml"
+    echo "version: 1" > "$test_dir/.revo/workspaces/child-config/api/revo.yaml"
+
+    cd "$test_dir/.revo/workspaces/child-config/api/deep"
+
+    if config_find_root; then
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir/.revo/workspaces/child-config" "$REVO_REPOS_DIR" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "child-config" "$REVO_ACTIVE_WORKSPACE" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        test_pass
+    else
+        test_fail "config_find_root should have preferred active workspace parent"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
+}
+
+test_config_find_root_workspace_prefix_boundary() {
+    test_start "config_find_root - workspace prefix boundary"
+
+    local test_dir="/tmp/revo/revo_test_$$"
+    local orig_dir="$PWD"
+    rm -rf "$test_dir"
+    mkdir -p "$test_dir/.revo/workspaces-other/fake/api" "$test_dir/repos/api"
+    test_dir=$(cd "$test_dir" && pwd -P)
+    echo "version: 1" > "$test_dir/revo.yaml"
+
+    cd "$test_dir/.revo/workspaces-other/fake/api"
+
+    if config_find_root; then
+        assert_eq "$test_dir" "$REVO_WORKSPACE_ROOT" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "$test_dir/repos" "$REVO_REPOS_DIR" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        assert_eq "" "$REVO_ACTIVE_WORKSPACE" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        test_pass
+    else
+        test_fail "config_find_root should have found parent revo.yaml"
         cd "$orig_dir"
         rm -rf "$test_dir"
         return 1
@@ -303,6 +415,10 @@ test_config_ensure_gitignore_idempotent
 test_config_ensure_gitignore_handles_no_trailing_newline
 test_config_find_root
 test_config_find_root_mars_fallback
+test_config_find_root_active_workspace_nested_path
+test_config_find_root_active_workspace_symlink_path
+test_config_find_root_active_workspace_with_child_config
+test_config_find_root_workspace_prefix_boundary
 test_config_repo_count
 
 printf "\n=== Results ===\n"

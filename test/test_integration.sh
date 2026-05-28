@@ -7,6 +7,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REVO_CMD="bash $SCRIPT_DIR/../revo"
 ORIG_DIR="$PWD"
 
+source "$SCRIPT_DIR/../lib/git.sh"
+
 # Test workspace directory
 TEST_DIR=""
 
@@ -44,6 +46,100 @@ setup_test_dir() {
     TEST_DIR="/tmp/revo/revo_integ_$$_$RANDOM"
     mkdir -p "$TEST_DIR"
     cd "$TEST_DIR"
+}
+
+setup_local_git_repo() {
+    local repo_dir="$1"
+    mkdir -p "$repo_dir"
+    git -C "$repo_dir" init > /dev/null 2>&1
+    git -C "$repo_dir" config user.email "revo-test@example.com"
+    git -C "$repo_dir" config user.name "Revo Test"
+    printf 'initial\n' > "$repo_dir/README.md"
+    git -C "$repo_dir" add README.md > /dev/null 2>&1
+    git -C "$repo_dir" commit -m "initial" > /dev/null 2>&1
+    git -C "$repo_dir" branch -M main > /dev/null 2>&1
+}
+
+setup_fake_gh_issue_list() {
+    local fakebin="$1"
+    local log="$2"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/gh" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "issue" ]] && [[ "${2:-}" == "list" ]]; then
+    printf 'issue-list:%s:%s\n' "$PWD" "$*" >> "$FAKE_GH_LOG"
+    repo=$(basename "$PWD")
+    json=0
+    for arg in "$@"; do
+        [[ "$arg" == "--json" ]] && json=1
+    done
+    if [[ $json -eq 1 ]]; then
+        case "$repo" in
+            api) printf '{"repo":"api","number":1,"title":"API issue"}\n' ;;
+            web) printf '{"repo":"web","number":2,"title":"Web issue"}\n' ;;
+        esac
+    else
+        case "$repo" in
+            api) printf '1\tOPEN\tAPI issue\n' ;;
+            web) printf '2\tOPEN\tWeb issue\n' ;;
+        esac
+    fi
+    exit 0
+fi
+printf 'unexpected gh call: %s\n' "$*" >&2
+exit 1
+EOF
+    chmod +x "$fakebin/gh"
+    : > "$log"
+}
+
+setup_fake_git_clone() {
+    local fakebin="$1"
+    local log="$2"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/git" <<'EOF'
+#!/usr/bin/env bash
+printf 'git' >> "$FAKE_GIT_LOG"
+for arg in "$@"; do
+    printf ' <%s>' "$arg" >> "$FAKE_GIT_LOG"
+done
+printf '\n' >> "$FAKE_GIT_LOG"
+
+if [[ "${1:-}" == "clone" ]]; then
+    seen_separator=0
+    target=""
+    for arg in "$@"; do
+        target="$arg"
+        if [[ "$arg" == "--" ]]; then
+            seen_separator=1
+            continue
+        fi
+        if [[ $seen_separator -eq 0 && "$arg" == --upload-pack=* ]]; then
+            printf 'option-like URL reached git before -- separator\n' >&2
+            exit 64
+        fi
+    done
+    mkdir -p "$target/.git"
+    exit 0
+fi
+
+if [[ "${1:-}" == "-C" && "${3:-}" == "symbolic-ref" ]]; then
+    exit 1
+fi
+
+if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--verify" ]]; then
+    exit 1
+fi
+
+if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--abbrev-ref" ]]; then
+    printf 'main\n'
+    exit 0
+fi
+
+exit 1
+EOF
+    chmod +x "$fakebin/git"
+    : > "$log"
 }
 
 # --- Tests ---
@@ -102,6 +198,87 @@ test_add_repo() {
     fi
 }
 
+test_add_rejects_traversal_path() {
+    test_start "revo add - rejects traversal repo path"
+
+    setup_test_dir
+    echo "path-guard-test" | $REVO_CMD init > /dev/null 2>&1
+
+    local output
+    if output=$($REVO_CMD add "git@github.com:test/repo.git" --path "../outside" 2>&1); then
+        test_fail "accepted traversal repo path"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "Invalid repo path"; then
+        test_pass
+    else
+        test_fail "missing invalid path error"
+    fi
+}
+
+test_exec_command_unavailable() {
+    test_start "revo exec - unavailable arbitrary shell surface"
+
+    local output
+    output=$($REVO_CMD exec true 2>&1) || true
+
+    if echo "$output" | grep -q "Unknown command: exec"; then
+        test_pass
+    else
+        test_fail "exec command should remain unavailable"
+    fi
+}
+
+test_exec_surface_not_bundled() {
+    test_start "build artifact - omits dead exec command surface"
+
+    local root="$SCRIPT_DIR/.."
+    if [[ -e "$root/lib/commands/exec.sh" ]]; then
+        test_fail "deleted exec command file is still present"
+        return 1
+    fi
+
+    if grep -q "lib/commands/exec.sh" "$root/build.sh"; then
+        test_fail "build still bundles exec command file"
+        return 1
+    fi
+
+    if grep -Eq 'cmd_exec|bash -c "\$command"' "$root/dist/revo"; then
+        test_fail "dist still contains arbitrary exec command implementation"
+        return 1
+    fi
+
+    test_pass
+}
+
+test_git_clone_helper_separates_option_like_url() {
+    test_start "git_clone - passes option-like URL after --"
+
+    setup_test_dir
+    local fakebin="$TEST_DIR/fakebin-git-helper"
+    local log="$TEST_DIR/git-helper.log"
+    setup_fake_git_clone "$fakebin" "$log"
+
+    local old_path="$PATH"
+    export FAKE_GIT_LOG="$log"
+    PATH="$fakebin:$PATH"
+
+    if ! git_clone "--upload-pack=/tmp/revo-pwn" "$TEST_DIR/cloned-helper"; then
+        PATH="$old_path"
+        test_fail "git_clone failed: $GIT_ERROR"
+        return 1
+    fi
+
+    PATH="$old_path"
+
+    if grep -qF 'git <clone> <--progress> <--> <--upload-pack=/tmp/revo-pwn>' "$log"; then
+        test_pass
+    else
+        test_fail "git_clone did not put -- before option-like URL"
+    fi
+}
+
 test_add_with_depends_on() {
     test_start "revo add - depends_on flag"
 
@@ -150,6 +327,180 @@ test_status_not_cloned() {
         test_pass
     else
         test_fail "should show 'not cloned' status"
+    fi
+}
+
+test_status_reports_dirty_gitfile_worktree() {
+    test_start "revo status - detects dirty gitfile worktree"
+
+    setup_test_dir
+    echo "gitfile-status" | $REVO_CMD init > /dev/null 2>&1
+    setup_local_git_repo "$TEST_DIR/source"
+    $REVO_CMD add "file://$TEST_DIR/source" --path app > /dev/null 2>&1
+
+    git -C "$TEST_DIR/source" worktree add -b workspace-copy "$TEST_DIR/repos/app" > /dev/null 2>&1
+    printf 'dirty\n' >> "$TEST_DIR/repos/app/README.md"
+
+    local output
+    output=$($REVO_CMD status 2>&1)
+
+    if echo "$output" | grep -q "app" && echo "$output" | grep -q "dirty"; then
+        test_pass
+    else
+        test_fail "dirty worktree with .git file was not reported"
+    fi
+}
+
+test_status_reports_no_upstream() {
+    test_start "revo status - reports no upstream"
+
+    setup_test_dir
+    echo "no-upstream-status" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/app.git" --path app > /dev/null 2>&1
+    setup_local_git_repo "$TEST_DIR/repos/app"
+
+    local output
+    output=$($REVO_CMD status 2>&1)
+
+    if echo "$output" | grep -q "no upstream"; then
+        test_pass
+    else
+        test_fail "repo without upstream was reported as synced"
+    fi
+}
+
+test_checkout_rejects_tag_name_without_branch() {
+    test_start "revo checkout - does not treat tag as branch"
+
+    setup_test_dir
+    echo "checkout-tag" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/app.git" --path app > /dev/null 2>&1
+    setup_local_git_repo "$TEST_DIR/repos/app"
+    git -C "$TEST_DIR/repos/app" tag release > /dev/null 2>&1
+
+    local output
+    if output=$($REVO_CMD checkout release 2>&1); then
+        test_fail "checkout accepted a tag without a branch"
+        return 1
+    fi
+
+    local branch
+    branch=$(git -C "$TEST_DIR/repos/app" rev-parse --abbrev-ref HEAD)
+    if [[ "$branch" == "main" ]] && echo "$output" | grep -q "Branch not found"; then
+        test_pass
+    else
+        test_fail "checkout detached or reported the wrong failure"
+    fi
+}
+
+test_clone_refuses_hostile_config_path() {
+    test_start "revo clone --force - refuses hostile config path"
+
+    setup_test_dir
+    echo "clone-path-guard" | $REVO_CMD init > /dev/null 2>&1
+    printf 'keep\n' > outside-sentinel
+
+    cat > revo.yaml << 'EOF'
+version: 1
+workspace:
+  name: clone-path-guard
+repos:
+  - url: git@github.com:test/repo.git
+    path: ../outside-sentinel
+defaults:
+  branch: main
+EOF
+
+    local output
+    if output=$($REVO_CMD clone --force 2>&1); then
+        test_fail "clone accepted hostile config path"
+        return 1
+    fi
+
+    if [[ ! -f outside-sentinel ]]; then
+        test_fail "sentinel outside repos was removed"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "invalid repo path"; then
+        test_pass
+    else
+        test_fail "missing invalid path error"
+    fi
+}
+
+test_clone_separates_option_like_url() {
+    test_start "revo clone - passes option-like URL after --"
+
+    setup_test_dir
+    echo "clone-url-separator" | $REVO_CMD init > /dev/null 2>&1
+
+    cat > revo.yaml << 'EOF'
+version: 1
+workspace:
+  name: clone-url-separator
+repos:
+  - url: --upload-pack=/tmp/revo-pwn
+    path: option-url
+defaults:
+  branch: main
+EOF
+
+    local fakebin="$TEST_DIR/fakebin-git-clone"
+    local log="$TEST_DIR/git-clone.log"
+    setup_fake_git_clone "$fakebin" "$log"
+
+    local output
+    if ! output=$(FAKE_GIT_LOG="$log" PATH="$fakebin:$PATH" $REVO_CMD clone 2>&1); then
+        test_fail "clone failed with fake git: $output"
+        return 1
+    fi
+
+    if grep -qF 'git <clone> <--quiet> <--> <--upload-pack=/tmp/revo-pwn>' "$log"; then
+        test_pass
+    else
+        test_fail "clone did not put -- before option-like URL"
+    fi
+}
+
+test_workspace_cleans_partial_repo_after_branch_failure() {
+    test_start "revo workspace - cleans partial repo after branch failure"
+
+    setup_test_dir
+    echo "workspace-cleanup" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/app.git" --path app > /dev/null 2>&1
+    mkdir -p repos/app
+    printf 'source file\n' > repos/app/README.md
+
+    local fakebin="$TEST_DIR/fakebin-workspace-git"
+    mkdir -p "$fakebin"
+    cat > "$fakebin/git" <<'EOF'
+#!/usr/bin/env bash
+if [[ "${1:-}" == "-C" && "${3:-}" == "rev-parse" && "${4:-}" == "--verify" ]]; then
+    exit 1
+fi
+if [[ "${1:-}" == "-C" && "${3:-}" == "checkout" && "${4:-}" == "-b" ]]; then
+    exit 1
+fi
+exit 1
+EOF
+    chmod +x "$fakebin/git"
+
+    local output
+    if output=$(PATH="$fakebin:$PATH" $REVO_CMD workspace fail-branch 2>&1); then
+        test_fail "workspace unexpectedly succeeded"
+        return 1
+    fi
+
+    if [[ -e ".revo/workspaces/fail-branch/app" ]] || [[ -e ".revo/workspaces/fail-branch" ]]; then
+        test_fail "partial workspace copy remained after branch failure"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "Failed to create branch"; then
+        test_pass
+    else
+        test_fail "missing branch failure output"
     fi
 }
 
@@ -314,6 +665,91 @@ test_context_idempotent_no_duplication() {
     test_pass
 }
 
+test_context_does_not_emit_env_secret_values() {
+    test_start "revo context - does not emit .env secret values"
+
+    setup_test_dir
+    echo "secret-context" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/api.git" > /dev/null 2>&1
+
+    local config_tmp
+    config_tmp=$(mktemp)
+    awk '
+        { print }
+        /url: git@github.com:test\/api.git/ { print "    branch: main" }
+    ' revo.yaml > "$config_tmp"
+    mv "$config_tmp" revo.yaml
+
+    mkdir -p repos/api
+    printf '{"name":"api","description":"API service"}\n' > repos/api/package.json
+    printf 'DATABASE_URL=postgres://secret_user:super_secret_password@localhost:5432/app_db\n' > repos/api/.env
+
+    $REVO_CMD context > /dev/null 2>&1
+    local analyze_output
+    analyze_output=$($REVO_CMD context --analyze 2>&1)
+
+    if grep -q "super_secret_password" CLAUDE.md .revo/COMMANDS.md 2>/dev/null \
+        || echo "$analyze_output" | grep -q "super_secret_password"; then
+        test_fail "generated context leaked env secret value"
+        return 1
+    fi
+
+    if grep -q "Database (detected):.*app_db (postgres)" CLAUDE.md \
+        && echo "$analyze_output" | grep -q "Database (detected):.*app_db (postgres)"; then
+        test_pass
+    else
+        test_fail "generated context missing expected database structure"
+    fi
+}
+
+test_issue_list_json_flat_array() {
+    test_start "revo issue list --json - emits flat array across repos"
+
+    setup_test_dir
+    echo "issue-json" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/api.git" --path api > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/web.git" --path web > /dev/null 2>&1
+    mkdir -p repos/api repos/web
+
+    local fakebin="$TEST_DIR/fakebin"
+    local log="$TEST_DIR/gh.log"
+    setup_fake_gh_issue_list "$fakebin" "$log"
+
+    local output
+    output=$(FAKE_GH_LOG="$log" PATH="$fakebin:$PATH" $REVO_CMD issue list --json 2>&1)
+
+    if [[ "$output" == '[{"repo":"api","number":1,"title":"API issue"},{"repo":"web","number":2,"title":"Web issue"}]' ]]; then
+        test_pass
+    else
+        test_fail "unexpected JSON output: $output"
+    fi
+}
+
+test_issue_list_human_calls_gh_once_per_repo() {
+    test_start "revo issue list - calls gh once per repo"
+
+    setup_test_dir
+    echo "issue-human" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/api.git" --path api > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/web.git" --path web > /dev/null 2>&1
+    mkdir -p repos/api repos/web
+
+    local fakebin="$TEST_DIR/fakebin"
+    local log="$TEST_DIR/gh.log"
+    setup_fake_gh_issue_list "$fakebin" "$log"
+
+    local output
+    output=$(FAKE_GH_LOG="$log" PATH="$fakebin:$PATH" $REVO_CMD issue list 2>&1)
+
+    local calls
+    calls=$(grep -c '^issue-list:' "$log")
+    if [[ "$calls" == "2" ]] && echo "$output" | grep -q "API issue" && echo "$output" | grep -q "Web issue"; then
+        test_pass
+    else
+        test_fail "expected 2 gh calls and both issues, got calls=$calls output=$output"
+    fi
+}
+
 test_feature_creates_file() {
     test_start "revo feature - writes .revo/features file"
 
@@ -407,11 +843,21 @@ printf "\n=== Revo CLI Integration Tests ===\n\n"
 # Basic tests (no network)
 test_help
 test_version
+test_exec_command_unavailable
+test_exec_surface_not_bundled
+test_git_clone_helper_separates_option_like_url
 test_init_creates_files
 test_add_repo
+test_add_rejects_traversal_path
 test_add_with_depends_on
 test_list_repos
 test_status_not_cloned
+test_status_reports_dirty_gitfile_worktree
+test_status_reports_no_upstream
+test_checkout_rejects_tag_name_without_branch
+test_clone_refuses_hostile_config_path
+test_clone_separates_option_like_url
+test_workspace_cleans_partial_repo_after_branch_failure
 test_tag_filtering
 test_mars_yaml_fallback
 test_context_generates_claude_md
@@ -419,6 +865,9 @@ test_init_preserves_existing_claude_md
 test_init_preserves_existing_gitignore
 test_context_preserves_user_content
 test_context_idempotent_no_duplication
+test_context_does_not_emit_env_secret_values
+test_issue_list_json_flat_array
+test_issue_list_human_calls_gh_once_per_repo
 test_feature_creates_file
 
 # Network tests (optional - skip if offline)

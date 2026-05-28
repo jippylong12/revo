@@ -81,7 +81,7 @@ cmd_clone() {
         ui_spinner_start "Cloning $path... ($current/$total)"
 
         local clone_err
-        if clone_err=$(git clone --quiet "$url" "$full_path" 2>&1); then
+        if clone_err=$(git clone --quiet -- "$url" "$full_path" 2>&1); then
             ui_spinner_stop
             # Detect and store the repo's default branch
             local detected_branch

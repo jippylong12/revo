@@ -430,22 +430,26 @@ ui_table_row() {
 
 # Clear line
 ui_clear_line() {
+    [[ -t 1 ]] || return 0
     printf '\r\033[K'
 }
 
 # Move cursor up N lines
 ui_cursor_up() {
+    [[ -t 1 ]] || return 0
     local n="${1:-1}"
     printf '\033[%dA' "$n"
 }
 
 # Hide cursor
 ui_cursor_hide() {
+    [[ -t 1 ]] || return 0
     printf '\033[?25l'
 }
 
 # Show cursor
 ui_cursor_show() {
+    [[ -t 1 ]] || return 0
     printf '\033[?25h'
 }
 

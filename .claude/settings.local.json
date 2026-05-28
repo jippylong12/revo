@@ -23,7 +23,9 @@
       "Bash(bash /tmp/test_printf_dashes.sh)",
       "Bash(bash /tmp/test_context_printf.sh)",
       "Bash(bash /tmp/test_traversal.sh)",
-      "Bash(./revo --version)"
+      "Bash(./revo --version)",
+      "Read(//Users/marcus.salinas/Programming/Personal/DealerBoostMono/repos/trive-it/config/**)",
+      "Read(//Users/marcus.salinas/Programming/Personal/DealerBoostMono/trive-it/config/**)"
     ]
   }
 }

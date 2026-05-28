@@ -60,40 +60,49 @@ _scan_pkg_has_dep() {
     grep -qF "\"$dep\"" "$file" 2>/dev/null
 }
 
+_scan_text_has_dep() {
+    local text="$1"
+    local dep="$2"
+    [[ "$text" == *"\"$dep\""* ]]
+}
+
 # Detect framework from package.json dependencies
 _scan_node_framework() {
     local file="$1"
-    if _scan_pkg_has_dep "$file" "next"; then
+    local pkg_text
+    pkg_text=$(tr '\n' ' ' < "$file" 2>/dev/null || true)
+
+    if _scan_text_has_dep "$pkg_text" "next"; then
         printf 'Next.js'
-    elif _scan_pkg_has_dep "$file" "nuxt"; then
+    elif _scan_text_has_dep "$pkg_text" "nuxt"; then
         printf 'Nuxt'
-    elif _scan_pkg_has_dep "$file" "@remix-run/react"; then
+    elif _scan_text_has_dep "$pkg_text" "@remix-run/react"; then
         printf 'Remix'
-    elif _scan_pkg_has_dep "$file" "@sveltejs/kit"; then
+    elif _scan_text_has_dep "$pkg_text" "@sveltejs/kit"; then
         printf 'SvelteKit'
-    elif _scan_pkg_has_dep "$file" "astro"; then
+    elif _scan_text_has_dep "$pkg_text" "astro"; then
         printf 'Astro'
-    elif _scan_pkg_has_dep "$file" "expo"; then
+    elif _scan_text_has_dep "$pkg_text" "expo"; then
         printf 'Expo (React Native)'
-    elif _scan_pkg_has_dep "$file" "react-native"; then
+    elif _scan_text_has_dep "$pkg_text" "react-native"; then
         printf 'React Native'
-    elif _scan_pkg_has_dep "$file" "vite"; then
+    elif _scan_text_has_dep "$pkg_text" "vite"; then
         printf 'Vite'
-    elif _scan_pkg_has_dep "$file" "nestjs" || _scan_pkg_has_dep "$file" "@nestjs/core"; then
+    elif _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "@nestjs/core"; then
         printf 'NestJS'
-    elif _scan_pkg_has_dep "$file" "fastify"; then
+    elif _scan_text_has_dep "$pkg_text" "fastify"; then
         printf 'Fastify'
-    elif _scan_pkg_has_dep "$file" "express"; then
+    elif _scan_text_has_dep "$pkg_text" "express"; then
         printf 'Express'
-    elif _scan_pkg_has_dep "$file" "hono"; then
+    elif _scan_text_has_dep "$pkg_text" "hono"; then
         printf 'Hono'
-    elif _scan_pkg_has_dep "$file" "@angular/core"; then
+    elif _scan_text_has_dep "$pkg_text" "@angular/core"; then
         printf 'Angular'
-    elif _scan_pkg_has_dep "$file" "react"; then
+    elif _scan_text_has_dep "$pkg_text" "react"; then
         printf 'React'
-    elif _scan_pkg_has_dep "$file" "vue"; then
+    elif _scan_text_has_dep "$pkg_text" "vue"; then
         printf 'Vue'
-    elif _scan_pkg_has_dep "$file" "svelte"; then
+    elif _scan_text_has_dep "$pkg_text" "svelte"; then
         printf 'Svelte'
     fi
 }
@@ -390,7 +399,9 @@ _scan_db_rails() {
 _scan_db_django() {
     local repo_dir="$1"
     local file
-    file=$(find "$repo_dir" -maxdepth 3 -type f -name 'settings.py' 2>/dev/null | head -1)
+    file=$(find "$repo_dir" -maxdepth 3 \
+        \( -type d \( -name '.git' -o -name 'node_modules' -o -name 'vendor' -o -name 'dist' -o -name 'build' -o -name '.next' -o -name '__pycache__' -o -name '.venv' -o -name 'venv' -o -name 'env' -o -name 'coverage' \) -prune \) -o \
+        \( -type f -name 'settings.py' -print -quit \) 2>/dev/null)
     [[ -z "$file" ]] && return
 
     local engine=""

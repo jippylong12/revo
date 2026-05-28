@@ -71,6 +71,12 @@ cmd_add() {
         path=$(yaml_path_from_url "$url")
     fi
 
+    if ! yaml_validate_repo_path "$path"; then
+        ui_step_error "Invalid repo path: $path"
+        ui_info "$(ui_dim "Use a relative path with letters, numbers, dot, underscore, hyphen, or slash; traversal is not allowed.")"
+        return 1
+    fi
+
     # Check if repo already exists
     local i
     for ((i = 0; i < YAML_REPO_COUNT; i++)); do

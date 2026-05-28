@@ -54,9 +54,18 @@ cmd_detect() {
         # Auto-categorize from package contents.
         category=""
         if [[ -f "$d/package.json" ]]; then
-            if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$d/package.json" 2>/dev/null; then
+            local pkg_text
+            pkg_text=$(tr '\n' ' ' < "$d/package.json" 2>/dev/null || true)
+            if _scan_text_has_dep "$pkg_text" "next" || _scan_text_has_dep "$pkg_text" "nuxt" \
+                || _scan_text_has_dep "$pkg_text" "react" || _scan_text_has_dep "$pkg_text" "vue" \
+                || _scan_text_has_dep "$pkg_text" "svelte" || _scan_text_has_dep "$pkg_text" "@angular/core" \
+                || _scan_text_has_dep "$pkg_text" "astro" || _scan_text_has_dep "$pkg_text" "@remix-run/react" \
+                || _scan_text_has_dep "$pkg_text" "@sveltejs/kit" || _scan_text_has_dep "$pkg_text" "expo" \
+                || _scan_text_has_dep "$pkg_text" "react-native"; then
                 category="frontend"
-            elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$d/package.json" 2>/dev/null; then
+            elif _scan_text_has_dep "$pkg_text" "express" || _scan_text_has_dep "$pkg_text" "fastify" \
+                || _scan_text_has_dep "$pkg_text" "hono" || _scan_text_has_dep "$pkg_text" "@nestjs/core" \
+                || _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "koa"; then
                 category="backend"
             fi
         elif [[ -f "$d/go.mod" ]] || [[ -f "$d/Cargo.toml" ]] || [[ -f "$d/pom.xml" ]] || [[ -f "$d/build.gradle" ]] || [[ -f "$d/build.gradle.kts" ]]; then

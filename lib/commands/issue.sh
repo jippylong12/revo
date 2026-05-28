@@ -117,8 +117,8 @@ _issue_list_json() {
     shift 3
     local gh_extra=( "$@" )
 
-    local entries=""
     local first=1
+    printf '['
 
     local repo
     while IFS= read -r repo; do
@@ -140,16 +140,16 @@ _issue_list_json() {
             while IFS= read -r line; do
                 [[ -z "$line" ]] && continue
                 if [[ $first -eq 1 ]]; then
-                    entries="$line"
+                    printf '%s' "$line"
                     first=0
                 else
-                    entries="$entries,$line"
+                    printf ',%s' "$line"
                 fi
             done <<< "$lines"
         fi
     done <<< "$repos"
 
-    printf '[%s]\n' "$entries"
+    printf ']\n'
     return 0
 }
 
@@ -184,31 +184,27 @@ _issue_list_human() {
         ui_bar_line
         ui_step "$path"
 
-        local count_output
-        if ! count_output=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
-            --json number --jq 'length' 2>&1); then
-            ui_step_error "Failed: $count_output"
-            continue
-        fi
-
-        local repo_total="${count_output:-0}"
-        if [[ "$repo_total" == "0" ]]; then
-            printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "No $state issues")"
-            continue
-        fi
-
         local pretty
         if pretty=$(cd "$full_path" && gh issue list \
             --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" 2>&1); then
+            if [[ -z "$pretty" ]]; then
+                printf '%s  %s\n' "$(ui_bar)" "$(ui_dim "No $state issues")"
+                continue
+            fi
+
+            local repo_total=0
             local line
             while IFS= read -r line; do
+                [[ -z "$line" ]] && continue
+                repo_total=$((repo_total + 1))
                 printf '%s  %s\n' "$(ui_bar)" "$line"
             done <<< "$pretty"
+            total=$((total + repo_total))
+            repo_count=$((repo_count + 1))
+        else
+            ui_step_error "Failed: $pretty"
+            continue
         fi
-
-        total=$((total + repo_total))
-        repo_count=$((repo_count + 1))
     done <<< "$repos"
 
     ui_bar_line

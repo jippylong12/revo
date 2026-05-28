@@ -56,6 +56,50 @@ test_path_from_url() {
     assert_eq "myrepo" "$result" && test_pass
 }
 
+test_repo_path_validation() {
+    test_start "yaml_validate_repo_path - accepts safe relative paths"
+    if yaml_validate_repo_path "api" && yaml_validate_repo_path "services/api.v2"; then
+        test_pass
+    else
+        test_fail "safe paths rejected"
+    fi
+
+    test_start "yaml_validate_repo_path - rejects traversal and unsafe paths"
+    if yaml_validate_repo_path "../outside" || yaml_validate_repo_path "api/../../outside" \
+        || yaml_validate_repo_path "/absolute" || yaml_validate_repo_path "api/" \
+        || yaml_validate_repo_path "api with spaces" || yaml_validate_repo_path 'api;rm' \
+        || yaml_validate_repo_path 'api"quote' || yaml_validate_repo_path 'api$(touch_pwn)'; then
+        test_fail "unsafe path accepted"
+    else
+        test_pass
+    fi
+}
+
+test_parse_rejects_hostile_repo_path() {
+    test_start "yaml_parse - rejects hostile repo path"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: hostile-path
+repos:
+  - url: git@github.com:org/repo.git
+    path: ../../outside
+defaults:
+  branch: main
+EOF
+
+    if yaml_parse "$test_file" 2>/dev/null; then
+        rm "$test_file"
+        test_fail "hostile repo path parsed successfully"
+        return 1
+    fi
+
+    rm "$test_file"
+    test_pass
+}
+
 test_parse_simple() {
     test_start "yaml_parse - simple config"
 
@@ -91,6 +135,94 @@ EOF
     # Check second repo
     assert_eq "custom-path" "${YAML_REPO_PATHS[1]}" || { rm "$test_file"; return 1; }
     assert_eq "backend" "${YAML_REPO_TAGS[1]}" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_parse_quoted_scalars_and_inline_comments() {
+    test_start "yaml_parse - quoted scalars and inline comments"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+
+workspace:
+  name: 'quoted-workspace'
+
+repos:
+  - url: "git@github.com:org/api.git"
+    path: "services/api"
+    tags: ["backend", 'api-core'] # parser should ignore list comments
+    depends_on: ["shared-lib"] # parser should ignore list comments
+    branch: "release/v1"
+    description: "REST API: handles user auth"
+
+defaults:
+  branch: "develop" # default branch comment
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "quoted-workspace" "$YAML_WORKSPACE_NAME" || { rm "$test_file"; return 1; }
+    assert_eq "develop" "$YAML_DEFAULTS_BRANCH" || { rm "$test_file"; return 1; }
+    assert_eq "services/api" "${YAML_REPO_PATHS[0]}" || { rm "$test_file"; return 1; }
+    assert_eq "backend,api-core" "${YAML_REPO_TAGS[0]}" || { rm "$test_file"; return 1; }
+    assert_eq "shared-lib" "${YAML_REPO_DEPS[0]}" || { rm "$test_file"; return 1; }
+    assert_eq "release/v1" "${YAML_REPO_BRANCHES[0]}" || { rm "$test_file"; return 1; }
+    assert_eq "REST API: handles user auth" "$(yaml_get_description 0)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_parse_rejects_malformed_inline_list() {
+    test_start "yaml_parse - rejects malformed inline list"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: malformed-list
+repos:
+  - url: git@github.com:org/api.git
+    tags: ["backend", "unterminated]
+defaults:
+  branch: main
+EOF
+
+    if yaml_parse "$test_file" 2>/dev/null; then
+        rm "$test_file"
+        test_fail "malformed inline list parsed successfully"
+        return 1
+    fi
+
+    rm "$test_file"
+    test_pass
+}
+
+test_parse_rejects_duplicate_repo_path() {
+    test_start "yaml_parse - rejects duplicate repo path"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: duplicate-path
+repos:
+  - url: git@github.com:org/api-one.git
+    path: api
+  - url: git@github.com:org/api-two.git
+    path: api
+defaults:
+  branch: main
+EOF
+
+    if yaml_parse "$test_file" 2>/dev/null; then
+        rm "$test_file"
+        test_fail "duplicate repo path parsed successfully"
+        return 1
+    fi
 
     rm "$test_file"
     test_pass
@@ -542,12 +674,43 @@ test_description_with_colon() {
     test_pass
 }
 
+test_workspace_name_with_quotes_roundtrip() {
+    test_start "yaml_write - workspace name with quotes roundtrip"
+
+    YAML_WORKSPACE_NAME='quote "workspace"'
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("")
+    YAML_REPO_DESCRIPTIONS=("")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq 'quote "workspace"' "$YAML_WORKSPACE_NAME" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
 # --- Run tests ---
 
 printf "\n=== YAML Parser Tests ===\n\n"
 
 test_path_from_url
+test_repo_path_validation
+test_parse_rejects_hostile_repo_path
 test_parse_simple
+test_parse_quoted_scalars_and_inline_comments
+test_parse_rejects_malformed_inline_list
+test_parse_rejects_duplicate_repo_path
 test_get_repos_filter
 test_write_yaml
 test_add_repo
@@ -564,6 +727,7 @@ test_description_with_quotes
 test_type_quoted_roundtrip
 test_description_yaml_injection
 test_description_with_colon
+test_workspace_name_with_quotes_roundtrip
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

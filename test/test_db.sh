@@ -72,11 +72,25 @@ test_workspace_name() {
 
     test_start "_db_workspace_name - truncates at 63 chars"
     result=$(_db_workspace_name "very_long_database_name_that_goes_on" "extremely-long-workspace-name-here")
-    if [[ ${#result} -le 63 ]]; then
+    if [[ ${#result} -le 63 ]] && [[ "$result" == *"_ws_"* ]]; then
         test_pass
     else
-        test_fail "length ${#result} exceeds 63"
+        test_fail "length ${#result} exceeds 63 or marker missing: $result"
     fi
+
+    test_start "_db_workspace_name - preserves _ws_ marker with long source"
+    local long_source
+    long_source=$(printf 'd%.0s' {1..63})
+    result=$(_db_workspace_name "$long_source" "feature")
+    if [[ ${#result} -le 63 ]] && [[ "$result" == *"_ws_feature" ]]; then
+        test_pass
+    else
+        test_fail "long source result unsafe: $result"
+    fi
+
+    test_start "_db_workspace_name - empty sanitized suffix uses fallback"
+    result=$(_db_workspace_name "myapp_dev" "!!!")
+    assert_eq "myapp_dev_ws_workspace" "$result" && test_pass
 }
 
 test_validate_name() {
@@ -150,6 +164,61 @@ test_check_tool_unsupported() {
     fi
 }
 
+test_mysql_clone_dumps_before_creating_target() {
+    test_start "_db_clone mysql - does not create target when dump fails"
+
+    local fakebin="/tmp/revo/db_test_$$_mysqlbin"
+    local log="/tmp/revo/db_test_$$_mysql.log"
+    rm -rf "$fakebin"
+    mkdir -p "$fakebin"
+    : > "$log"
+
+    cat > "$fakebin/mysql" <<'EOF'
+#!/usr/bin/env bash
+printf 'mysql %s\n' "$*" >> "$FAKE_DB_LOG"
+exit 0
+EOF
+    cat > "$fakebin/mysqladmin" <<'EOF'
+#!/usr/bin/env bash
+printf 'mysqladmin %s\n' "$*" >> "$FAKE_DB_LOG"
+exit 0
+EOF
+    cat > "$fakebin/mysqldump" <<'EOF'
+#!/usr/bin/env bash
+printf 'mysqldump %s\n' "$*" >> "$FAKE_DB_LOG"
+exit 1
+EOF
+    chmod +x "$fakebin/mysql" "$fakebin/mysqladmin" "$fakebin/mysqldump"
+
+    local old_path="$PATH"
+    export FAKE_DB_LOG="$log"
+    PATH="$fakebin:$PATH"
+
+    if _db_clone "mysql" "source_db" "target_db" 2>/dev/null; then
+        PATH="$old_path"
+        rm -rf "$fakebin" "$log"
+        test_fail "clone unexpectedly succeeded"
+        return 1
+    fi
+
+    PATH="$old_path"
+
+    if grep -q "^mysqladmin " "$log"; then
+        rm -rf "$fakebin" "$log"
+        test_fail "mysqladmin was called even though dump failed"
+        return 1
+    fi
+
+    if grep -q "^mysqldump source_db$" "$log"; then
+        rm -rf "$fakebin" "$log"
+        test_pass
+    else
+        rm -rf "$fakebin" "$log"
+        test_fail "mysqldump was not called as expected"
+        return 1
+    fi
+}
+
 test_ws_name_contains_marker() {
     test_start "_db_workspace_name always contains _ws_"
     local result
@@ -170,6 +239,7 @@ test_workspace_name
 test_validate_name
 test_drop_safety_guard
 test_check_tool_unsupported
+test_mysql_clone_dumps_before_creating_target
 test_ws_name_contains_marker
 
 printf "\n=== Results ===\n"

@@ -12,31 +12,82 @@ REVO_REPOS_DIR=""
 # holds the workspace name in that case (empty otherwise).
 REVO_ACTIVE_WORKSPACE=""
 
+_config_physical_dir() {
+    local dir="$1"
+    local physical
+    if physical=$(cd "$dir" 2>/dev/null && pwd -P); then
+        printf '%s' "$physical"
+    else
+        printf '%s' "$dir"
+    fi
+}
+
+_config_start_is_in_workspace() {
+    local start_dir="$1"
+    local root="$2"
+    local prefix="$root/.revo/workspaces/"
+
+    case "$start_dir/" in
+        "$prefix"*)
+            local rest="${start_dir#"$prefix"}"
+            local ws_name="${rest%%/*}"
+            [[ -n "$ws_name" ]] && [[ -d "$prefix$ws_name" ]]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+_config_use_root() {
+    local root="$1"
+    local config_file="$2"
+    local start_dir="$3"
+
+    REVO_WORKSPACE_ROOT="$root"
+    REVO_CONFIG_FILE="$config_file"
+    REVO_REPOS_DIR="$root/repos"
+    _config_apply_workspace_override "$start_dir"
+}
+
 # Find workspace root by searching upward for revo.yaml (or mars.yaml as fallback)
 # Usage: config_find_root [start_dir]
 # Returns: 0 if found (sets REVO_WORKSPACE_ROOT), 1 if not found
 config_find_root() {
-    local start_dir="${1:-$PWD}"
+    local start_dir
+    start_dir=$(_config_physical_dir "${1:-$PWD}")
     local current="$start_dir"
+    local first_root=""
+    local first_config=""
 
     while [[ "$current" != "/" ]]; do
+        local candidate_config=""
         if [[ -f "$current/revo.yaml" ]]; then
-            REVO_WORKSPACE_ROOT="$current"
-            REVO_CONFIG_FILE="$current/revo.yaml"
-            REVO_REPOS_DIR="$current/repos"
-            _config_apply_workspace_override "$start_dir"
-            return 0
+            candidate_config="$current/revo.yaml"
+        elif [[ -f "$current/mars.yaml" ]]; then
+            # Fallback: support mars.yaml for migration from Mars
+            candidate_config="$current/mars.yaml"
         fi
-        # Fallback: support mars.yaml for migration from Mars
-        if [[ -f "$current/mars.yaml" ]]; then
-            REVO_WORKSPACE_ROOT="$current"
-            REVO_CONFIG_FILE="$current/mars.yaml"
-            REVO_REPOS_DIR="$current/repos"
-            _config_apply_workspace_override "$start_dir"
-            return 0
+
+        if [[ -n "$candidate_config" ]]; then
+            if _config_start_is_in_workspace "$start_dir" "$current"; then
+                _config_use_root "$current" "$candidate_config" "$start_dir"
+                return 0
+            fi
+
+            if [[ -z "$first_root" ]]; then
+                first_root="$current"
+                first_config="$candidate_config"
+            fi
         fi
+
         current="$(dirname "$current")"
     done
+
+    if [[ -n "$first_root" ]]; then
+        _config_use_root "$first_root" "$first_config" "$start_dir"
+        return 0
+    fi
 
     return 1
 }
@@ -231,7 +282,8 @@ config_require_workspace() {
 # Usage: if config_is_in_workspace "/some/path"; then ...
 config_is_in_workspace() {
     local path="$1"
-    [[ "$path" == "$REVO_WORKSPACE_ROOT"* ]]
+    local root="$REVO_WORKSPACE_ROOT"
+    [[ "$path" == "$root" ]] || [[ "$path" == "$root/"* ]]
 }
 
 # Get workspace name

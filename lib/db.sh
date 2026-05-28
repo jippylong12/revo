@@ -41,12 +41,24 @@ _db_workspace_name() {
     local ws_name="$2"
     local suffix
     suffix=$(_db_sanitize_ws_suffix "$ws_name")
-    local full="${source}_ws_${suffix}"
-    # Truncate to 63 chars (PostgreSQL limit) preserving the _ws_ marker
-    if [[ ${#full} -gt 63 ]]; then
-        full="${full:0:63}"
+    [[ -z "$suffix" ]] && suffix="workspace"
+
+    local marker="_ws_"
+    local max_suffix=$((63 - ${#marker} - 1))
+    if [[ ${#suffix} -gt $max_suffix ]]; then
+        suffix="${suffix:0:$max_suffix}"
     fi
-    printf '%s' "$full"
+
+    local max_source=$((63 - ${#marker} - ${#suffix}))
+    if [[ $max_source -lt 1 ]]; then
+        max_source=1
+    fi
+
+    if [[ ${#source} -gt $max_source ]]; then
+        source="${source:0:$max_source}"
+    fi
+
+    printf '%s%s%s' "$source" "$marker" "$suffix"
 }
 
 # Check that the required CLI tool is available
@@ -85,6 +97,33 @@ _db_check_tool() {
     return 0
 }
 
+_db_check_clone_tools() {
+    local db_type="$1"
+
+    _db_check_tool "$db_type" || return 1
+
+    case "$db_type" in
+        postgres)
+            if ! command -v createdb >/dev/null 2>&1 || ! command -v pg_dump >/dev/null 2>&1 || ! command -v dropdb >/dev/null 2>&1; then
+                DB_ERROR="PostgreSQL clone tools not found. Install PostgreSQL CLI tools (createdb, pg_dump, dropdb)"
+                return 1
+            fi
+            ;;
+        mongodb)
+            if ! command -v mongorestore >/dev/null 2>&1; then
+                DB_ERROR="mongorestore not found. Install MongoDB Database Tools (e.g., brew install mongodb-database-tools)"
+                return 1
+            fi
+            ;;
+        mysql)
+            if ! command -v mysqldump >/dev/null 2>&1 || ! command -v mysqladmin >/dev/null 2>&1; then
+                DB_ERROR="MySQL clone tools not found. Install MySQL CLI tools (mysqldump, mysqladmin)"
+                return 1
+            fi
+            ;;
+    esac
+}
+
 # Clone a database
 # Usage: _db_clone "postgres" "source_db" "target_db"
 _db_clone() {
@@ -97,7 +136,7 @@ _db_clone() {
 
     _db_validate_name "$source" || return 1
     _db_validate_name "$target" || return 1
-    _db_check_tool "$db_type" || return 1
+    _db_check_clone_tools "$db_type" || return 1
 
     case "$db_type" in
         postgres)
@@ -154,14 +193,13 @@ _db_clone() {
             # Use temp dump file (avoids partial state from broken pipes)
             local dump_file
             dump_file=$(mktemp -t revo-mysqldump.XXXXXX)
-            if ! mysqladmin create "$target" </dev/null 2>/dev/null; then
-                DB_ERROR="Failed to create mysql database: $target"
+            if ! mysqldump "$source" > "$dump_file" 2>/dev/null; then
+                DB_ERROR="Failed to dump mysql database: $source"
                 rm -f "$dump_file"
                 return 1
             fi
-            if ! mysqldump "$source" > "$dump_file" 2>/dev/null; then
-                DB_ERROR="Failed to dump mysql database: $source"
-                mysqladmin -f drop "$target" </dev/null 2>/dev/null
+            if ! mysqladmin create "$target" </dev/null 2>/dev/null; then
+                DB_ERROR="Failed to create mysql database: $target"
                 rm -f "$dump_file"
                 return 1
             fi

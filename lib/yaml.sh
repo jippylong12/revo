@@ -20,6 +20,90 @@ YAML_REPO_DB_NAMES=()
 YAML_REPO_TYPES=()
 YAML_REPO_DESCRIPTIONS=()
 
+_yaml_trim() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf '%s' "$value"
+}
+
+_yaml_parse_scalar() {
+    local value
+    value=$(_yaml_trim "$1")
+
+    case "$value" in
+        \"*)
+            if [[ ! "$value" =~ ^\"(([^\"\\]|\\.)*)\"[[:space:]]*(#.*)?$ ]]; then
+                return 1
+            fi
+            value="${BASH_REMATCH[1]}"
+            value="${value//\\\"/\"}"
+            value="${value//\\\\/\\}"
+            ;;
+        \'*)
+            if [[ ! "$value" =~ ^\'([^\']*)\'[[:space:]]*(#.*)?$ ]]; then
+                return 1
+            fi
+            value="${BASH_REMATCH[1]}"
+            value="${value//\'\'/\'}"
+            ;;
+        *)
+            # Minimal YAML comment support for unquoted scalars.
+            value="${value%% #*}"
+            value=$(_yaml_trim "$value")
+            ;;
+    esac
+
+    printf '%s' "$value"
+}
+
+_yaml_escape_double_quoted() {
+    local value="$1"
+    value="${value//\\/\\\\}"
+    value="${value//\"/\\\"}"
+    printf '%s' "$value"
+}
+
+_yaml_parse_inline_list() {
+    local value
+    value=$(_yaml_trim "$1")
+    if [[ "$value" == *"] #"* ]]; then
+        value="${value%%] #*}]"
+    fi
+
+    [[ "$value" == \[*\] ]] || return 1
+
+    value="${value#\[}"
+    value="${value%\]}"
+    value=$(_yaml_trim "$value")
+
+    if [[ -z "$value" ]]; then
+        printf ''
+        return 0
+    fi
+
+    local old_ifs="$IFS"
+    local parts=()
+    IFS=','
+    read -r -a parts <<< "$value"
+    IFS="$old_ifs"
+
+    local item parsed result=""
+    for item in "${parts[@]}"; do
+        parsed=$(_yaml_parse_scalar "$item") || return 1
+        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+            return 1
+        fi
+        if [[ -z "$result" ]]; then
+            result="$parsed"
+        else
+            result="$result,$parsed"
+        fi
+    done
+
+    printf '%s' "$result"
+}
+
 yaml_parse() {
     local file="$1"
     local line
@@ -71,15 +155,25 @@ yaml_parse() {
         fi
 
         # Parse workspace name (only outside repos/defaults sections)
-        if [[ $in_repos -eq 0 ]] && [[ $in_defaults -eq 0 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*[\"\']?([^\"\']+)[\"\']?$ ]]; then
-            YAML_WORKSPACE_NAME="${BASH_REMATCH[1]}"
+        if [[ $in_repos -eq 0 ]] && [[ $in_defaults -eq 0 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*(.*)$ ]]; then
+            local workspace_name
+            if ! workspace_name=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                printf 'Error: invalid workspace name\n' >&2
+                return 1
+            fi
+            YAML_WORKSPACE_NAME="$workspace_name"
             continue
         fi
 
         # Parse defaults section
         if [[ $in_defaults -eq 1 ]]; then
             if [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
-                YAML_DEFAULTS_BRANCH="${BASH_REMATCH[1]}"
+                local default_branch
+                if ! default_branch=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid defaults branch\n' >&2
+                    return 1
+                fi
+                YAML_DEFAULTS_BRANCH="$default_branch"
             fi
             continue
         fi
@@ -89,7 +183,11 @@ yaml_parse() {
             # New repo entry (starts with -)
             if [[ "$trimmed" =~ ^-[[:space:]]*url:[[:space:]]*(.+)$ ]]; then
                 current_index=$((current_index + 1))
-                local url="${BASH_REMATCH[1]}"
+                local url
+                if ! url=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid repo url\n' >&2
+                    return 1
+                fi
                 YAML_REPO_URLS[$current_index]="$url"
                 YAML_REPO_PATHS[$current_index]=$(yaml_path_from_url "$url")
                 YAML_REPO_TAGS[$current_index]=""
@@ -107,46 +205,55 @@ yaml_parse() {
             # Continuation of current repo
             if [[ $current_index -ge 0 ]]; then
                 if [[ "$trimmed" =~ ^path:[[:space:]]*(.+)$ ]]; then
-                    YAML_REPO_PATHS[$current_index]="${BASH_REMATCH[1]}"
-                elif [[ "$trimmed" =~ ^tags:[[:space:]]*\[([^\]]*)\]$ ]]; then
-                    # Parse inline array: [tag1, tag2]
-                    local tags_str="${BASH_REMATCH[1]}"
-                    # Remove spaces and quotes
-                    tags_str="${tags_str//[[:space:]]/}"
-                    tags_str="${tags_str//\"/}"
-                    tags_str="${tags_str//\'/}"
+                    local path_val
+                    if ! path_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo path scalar\n' >&2
+                        return 1
+                    fi
+                    YAML_REPO_PATHS[$current_index]="$path_val"
+                elif [[ "$trimmed" =~ ^tags:[[:space:]]*(.*)$ ]]; then
+                    local tags_str
+                    if ! tags_str=$(_yaml_parse_inline_list "${trimmed#tags:}"); then
+                        printf 'Error: invalid tags list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_TAGS[$current_index]="$tags_str"
-                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*\[([^\]]*)\]$ ]]; then
-                    # Parse inline array: [name1, name2]
-                    local deps_str="${BASH_REMATCH[1]}"
-                    deps_str="${deps_str//[[:space:]]/}"
-                    deps_str="${deps_str//\"/}"
-                    deps_str="${deps_str//\'/}"
+                elif [[ "$trimmed" =~ ^depends_on:[[:space:]]*(.*)$ ]]; then
+                    local deps_str
+                    if ! deps_str=$(_yaml_parse_inline_list "${trimmed#depends_on:}"); then
+                        printf 'Error: invalid depends_on list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_DEPS[$current_index]="$deps_str"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
-                    YAML_REPO_BRANCHES[$current_index]="${BASH_REMATCH[1]}"
+                    local branch_val
+                    if ! branch_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo branch for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_BRANCHES[$current_index]="$branch_val"
                 elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
-                    local type_val="${BASH_REMATCH[1]}"
-                    # Strip surrounding quotes
-                    type_val="${type_val#\"}"
-                    type_val="${type_val%\"}"
-                    type_val="${type_val#\'}"
-                    type_val="${type_val%\'}"
+                    local type_val
+                    if ! type_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo type for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_TYPES[$current_index]="$type_val"
                 elif [[ $in_database -eq 0 ]] && [[ "$trimmed" =~ ^description:[[:space:]]*(.*) ]]; then
-                    local desc="${BASH_REMATCH[1]}"
-                    # Strip surrounding quotes
-                    desc="${desc#\"}"
-                    desc="${desc%\"}"
-                    desc="${desc#\'}"
-                    desc="${desc%\'}"
-                    # Unescape embedded quotes
-                    desc="${desc//\\\"/\"}"
+                    local desc
+                    if ! desc=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Error: invalid repo description for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
                     YAML_REPO_DESCRIPTIONS[$current_index]="$desc"
                 elif [[ "$trimmed" == "database:" ]]; then
                     in_database=1
                 elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^type:[[:space:]]*(.+)$ ]]; then
-                    local db_type_val="${BASH_REMATCH[1]}"
+                    local db_type_val
+                    if ! db_type_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Warning: invalid database type scalar, ignoring\n' >&2
+                        continue
+                    fi
                     case "$db_type_val" in
                         postgres|mongodb|mysql)
                             YAML_REPO_DB_TYPES[$current_index]="$db_type_val"
@@ -156,7 +263,11 @@ yaml_parse() {
                             ;;
                     esac
                 elif [[ $in_database -eq 1 ]] && [[ "$trimmed" =~ ^name:[[:space:]]*(.+)$ ]]; then
-                    local db_name_val="${BASH_REMATCH[1]}"
+                    local db_name_val
+                    if ! db_name_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                        printf 'Warning: invalid database name scalar, ignoring\n' >&2
+                        continue
+                    fi
                     if [[ "$db_name_val" =~ ^[a-zA-Z0-9_-]+$ ]]; then
                         YAML_REPO_DB_NAMES[$current_index]="$db_name_val"
                     else
@@ -166,6 +277,46 @@ yaml_parse() {
             fi
         fi
     done < "$file"
+
+    local i j
+    for ((i = 0; i < YAML_REPO_COUNT; i++)); do
+        if ! yaml_validate_repo_path "${YAML_REPO_PATHS[$i]}"; then
+            printf 'Error: invalid repo path for %s: %s\n' "${YAML_REPO_URLS[$i]}" "${YAML_REPO_PATHS[$i]}" >&2
+            return 1
+        fi
+        for ((j = 0; j < i; j++)); do
+            if [[ "${YAML_REPO_PATHS[$i]}" == "${YAML_REPO_PATHS[$j]}" ]]; then
+                printf 'Error: duplicate repo path: %s\n' "${YAML_REPO_PATHS[$i]}" >&2
+                return 1
+            fi
+        done
+    done
+
+    return 0
+}
+
+# Validate repo paths before they are joined under repos/ or .revo/workspaces/.
+# Paths are relative POSIX-style paths; traversal, absolute paths, empty
+# components, and shell-hostile characters are rejected.
+yaml_validate_repo_path() {
+    local path="$1"
+
+    [[ -z "$path" ]] && return 1
+    [[ "$path" == /* ]] && return 1
+    [[ "$path" == */ ]] && return 1
+    [[ "$path" == *"//"* ]] && return 1
+    [[ "$path" =~ ^[A-Za-z0-9._/-]+$ ]] || return 1
+
+    local old_ifs="$IFS"
+    local part
+    IFS='/'
+    for part in $path; do
+        if [[ -z "$part" ]] || [[ "$part" == "." ]] || [[ "$part" == ".." ]]; then
+            IFS="$old_ifs"
+            return 1
+        fi
+    done
+    IFS="$old_ifs"
 
     return 0
 }
@@ -292,7 +443,9 @@ yaml_write() {
     {
         printf 'version: 1\n\n'
         printf 'workspace:\n'
-        printf '  name: "%s"\n\n' "$YAML_WORKSPACE_NAME"
+        local escaped_workspace
+        escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
+        printf '  name: "%s"\n\n' "$escaped_workspace"
         printf 'repos:\n'
 
         for ((i = 0; i < YAML_REPO_COUNT; i++)); do
@@ -319,13 +472,14 @@ yaml_write() {
             # Write type if present (quoted for safety)
             local type="${YAML_REPO_TYPES[$i]:-}"
             if [[ -n "$type" ]]; then
+                type=$(_yaml_escape_double_quoted "$type")
                 printf '    type: "%s"\n' "$type"
             fi
 
             # Write description if present (escape embedded quotes)
             local desc="${YAML_REPO_DESCRIPTIONS[$i]:-}"
             if [[ -n "$desc" ]]; then
-                desc="${desc//\"/\\\"}"
+                desc=$(_yaml_escape_double_quoted "$desc")
                 printf '    description: "%s"\n' "$desc"
             fi
 

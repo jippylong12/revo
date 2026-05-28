@@ -101,12 +101,8 @@ cmd_pr() {
 
         # Skip if no commits ahead of upstream (push required first)
         git_ahead_behind "$full_path"
-        local has_upstream=0
-        if git -C "$full_path" rev-parse --abbrev-ref '@{upstream}' >/dev/null 2>&1; then
-            has_upstream=1
-        fi
 
-        if [[ $has_upstream -eq 1 ]] && [[ $GIT_AHEAD -eq 0 ]]; then
+        if [[ ${GIT_HAS_UPSTREAM:-0} -eq 1 ]] && [[ $GIT_AHEAD -eq 0 ]]; then
             ui_step_done "Skipped (no changes ahead of upstream):" "$path"
             skip_count=$((skip_count + 1))
             continue

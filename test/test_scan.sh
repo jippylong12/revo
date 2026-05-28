@@ -251,6 +251,64 @@ test_db_no_database() {
     test_pass
 }
 
+test_db_ignores_generated_django_settings() {
+    test_start "_scan_database - ignores Django settings in generated dirs"
+    local d
+    d=$(mk_repo "generated_django")
+    mkdir -p "$d/node_modules/fake_app" "$d/vendor/fake_app"
+    cat > "$d/node_modules/fake_app/settings.py" <<'EOF'
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "copied_dependency_db",
+    }
+}
+EOF
+    cat > "$d/vendor/fake_app/settings.py" <<'EOF'
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "vendored_dependency_db",
+    }
+}
+EOF
+    scan_reset
+    _scan_database "$d"
+    rm -rf "$d"
+    assert_eq "" "$SCAN_DB_TYPE" || return 1
+    assert_eq "" "$SCAN_DB_NAME" || return 1
+    test_pass
+}
+
+test_db_django_settings_after_generated_dirs() {
+    test_start "_scan_database - finds Django settings outside generated dirs"
+    local d
+    d=$(mk_repo "django_after_generated")
+    mkdir -p "$d/node_modules/fake_app" "$d/app"
+    cat > "$d/node_modules/fake_app/settings.py" <<'EOF'
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.mysql",
+        "NAME": "dependency_db",
+    }
+}
+EOF
+    cat > "$d/app/settings.py" <<'EOF'
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "app_db",
+    }
+}
+EOF
+    scan_reset
+    _scan_database "$d"
+    rm -rf "$d"
+    assert_eq "postgres" "$SCAN_DB_TYPE" || return 1
+    assert_eq "app_db" "$SCAN_DB_NAME" || return 1
+    test_pass
+}
+
 # --- Run tests ---
 
 mkdir -p /tmp/revo
@@ -271,6 +329,8 @@ test_db_env_database_url_mongodb
 test_db_env_postgres_db_var
 test_db_compose_postgres
 test_db_no_database
+test_db_ignores_generated_django_settings
+test_db_django_settings_after_generated_dirs
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"
