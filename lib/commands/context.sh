@@ -497,8 +497,9 @@ _context_write_commands_file() {
         printf -- '- `revo workspace <name> --delete [--force]` — remove a workspace\n'
         printf -- '- `revo workspace --clean` — remove workspaces whose branches are merged\n'
         printf '\n'
-        printf 'Workspaces hardlink-copy everything (including `.env`, `node_modules`,\n'
-        printf 'build artifacts) so you can start work with zero bootstrap. Run\n'
+        printf 'Workspaces copy repo files, secrets, and local config, but skip bulky\n'
+        printf 'dependency/cache/build directories such as `node_modules`. Reinstall\n'
+        printf 'dependencies inside the workspace when a command needs them. Run\n'
         printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
         printf 'workspace copies, not the source tree.\n'
         printf '\n'
@@ -753,6 +754,13 @@ _context_analyze() {
         fi
         if [[ $SCAN_HAS_CLAUDE_MD -eq 1 ]]; then
             printf '**Has CLAUDE.md:** yes\n'
+        fi
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            if [[ -n "$SCAN_DB_NAME" ]]; then
+                printf '**Database (detected):** %s (%s)\n' "$SCAN_DB_NAME" "$SCAN_DB_TYPE"
+            else
+                printf '**Database (detected):** %s (name unknown)\n' "$SCAN_DB_TYPE"
+            fi
         fi
 
         # README first line (even if not used as description, useful for analysis)

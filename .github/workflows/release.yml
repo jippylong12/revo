@@ -20,6 +20,12 @@ jobs:
       - name: Run config tests
         run: bash test/test_config.sh
 
+      - name: Run scan tests
+        run: bash test/test_scan.sh
+
+      - name: Run workspace tests
+        run: bash test/test_workspace.sh
+
       - name: Run integration tests
         run: bash test/test_integration.sh
 

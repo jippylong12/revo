@@ -13,16 +13,35 @@ _init_auto_tags() {
     local name="$2"
     local category=""
 
-    if [[ -f "$dir/package.json" ]]; then
-        if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$dir/package.json" 2>/dev/null; then
-            category="frontend"
+    # Backend signals first — these win even when package.json also exists
+    # (e.g. Rails app with Vue assets in package.json)
+    if [[ -f "$dir/Gemfile" ]]; then
+        category="backend"
+    elif [[ -f "$dir/manage.py" ]]; then
+        category="backend"
+    elif [[ -f "$dir/go.mod" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/pom.xml" ]] \
+        || [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
+        category="backend"
+    elif [[ -f "$dir/config/database.yml" ]] || [[ -d "$dir/db/migrate" ]] || [[ -f "$dir/db/schema.rb" ]]; then
+        category="backend"
+    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]] || [[ -f "$dir/Pipfile" ]]; then
+        category="backend"
+    fi
+
+    # Mobile/frontend signals from package.json (only if no backend signal yet)
+    if [[ -z "$category" ]] && [[ -f "$dir/package.json" ]]; then
+        if grep -qE '"(react-native|expo)"' "$dir/package.json" 2>/dev/null; then
+            category="mobile"
         elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$dir/package.json" 2>/dev/null; then
             category="backend"
+        elif grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit)"' "$dir/package.json" 2>/dev/null; then
+            category="frontend"
         fi
-    elif [[ -f "$dir/go.mod" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/pom.xml" ]] || [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
-        category="backend"
-    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]]; then
-        category="backend"
+    fi
+
+    # Flutter/Dart mobile
+    if [[ -z "$category" ]] && [[ -f "$dir/pubspec.yaml" ]]; then
+        category="mobile"
     fi
 
     if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
@@ -247,8 +266,22 @@ cmd_init() {
             tags=$(_init_auto_tags "$dir" "$name")
             local branch
             branch=$(git_default_branch "$dir")
-            yaml_add_repo "$remote" "$path" "$tags" "" "$branch"
+
+            # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
+            scan_reset
+            scan_repo "$dir"
+
+            yaml_add_repo "$remote" "$path" "$tags" "" "$branch" \
+                "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
+
             ui_step_done "Detected:" "$name → $remote (branch: $branch)"
+            if [[ -n "$SCAN_DB_TYPE" ]]; then
+                if [[ -n "$SCAN_DB_NAME" ]]; then
+                    ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
+                else
+                    ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
+                fi
+            fi
             detected_count=$((detected_count + 1))
         done <<< "$_INIT_FOUND_DIRS"
 

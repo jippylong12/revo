@@ -99,11 +99,11 @@ _issue_list() {
     fi
 
     if [[ $as_json -eq 1 ]]; then
-        _issue_list_json "$repos" "$state" "$limit" "${gh_extra[@]}"
+        _issue_list_json "$repos" "$state" "$limit" "${gh_extra[@]+"${gh_extra[@]}"}"
         return $?
     fi
 
-    _issue_list_human "$repos" "$state" "$limit" "${gh_extra[@]}"
+    _issue_list_human "$repos" "$state" "$limit" "${gh_extra[@]+"${gh_extra[@]}"}"
 }
 
 # Print a flat JSON array of issues across all repos. Each entry has a
@@ -133,7 +133,7 @@ _issue_list_json() {
         # field, and stream the results into our concatenated array.
         local lines
         if lines=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" \
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
             --json number,title,state,labels,assignees,url,updatedAt,author \
             --jq ".[] | {repo: \"$path\"} + ." 2>/dev/null); then
             local line
@@ -186,7 +186,7 @@ _issue_list_human() {
 
         local count_output
         if ! count_output=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" \
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
             --json number --jq 'length' 2>&1); then
             ui_step_error "Failed: $count_output"
             continue
@@ -200,7 +200,7 @@ _issue_list_human() {
 
         local pretty
         if pretty=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" 2>&1); then
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" 2>&1); then
             local line
             while IFS= read -r line; do
                 printf '%s  %s\n' "$(ui_bar)" "$line"

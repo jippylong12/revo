@@ -112,6 +112,8 @@ global variable updates in bash 3.2.
 bash test/test_yaml.sh
 bash test/test_config.sh
 bash test/test_integration.sh
+bash test/test_scan.sh
+bash test/test_workspace.sh
 ```
 
 Tests use `/tmp/revo/` for temporary files. The integration suite invokes

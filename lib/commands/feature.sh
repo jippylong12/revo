@@ -131,7 +131,7 @@ cmd_feature() {
             printf '## Repos\n'
 
             local idx
-            for idx in "${involved_indices[@]}"; do
+            for idx in "${involved_indices[@]+"${involved_indices[@]}"}"; do
                 local rpath rtags
                 rpath=$(yaml_get_path "$idx")
                 rtags=$(yaml_get_tags "$idx")

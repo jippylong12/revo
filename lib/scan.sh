@@ -11,6 +11,8 @@ SCAN_DESCRIPTION=""
 SCAN_PKG_DESCRIPTION=""
 SCAN_ENTRY_POINTS=""
 SCAN_TOP_DIRS=""
+SCAN_DB_TYPE=""
+SCAN_DB_NAME=""
 SCAN_HAS_CLAUDE_MD=0
 SCAN_HAS_DOCKER=0
 
@@ -24,6 +26,8 @@ scan_reset() {
     SCAN_PKG_DESCRIPTION=""
     SCAN_ENTRY_POINTS=""
     SCAN_TOP_DIRS=""
+    SCAN_DB_TYPE=""
+    SCAN_DB_NAME=""
     SCAN_HAS_CLAUDE_MD=0
     SCAN_HAS_DOCKER=0
 }
@@ -163,7 +167,7 @@ _scan_list_routes() {
     # Join as comma-separated
     local result=""
     local f
-    for f in "${found[@]}"; do
+    for f in "${found[@]+"${found[@]}"}"; do
         if [[ -z "$result" ]]; then
             result="$f"
         else
@@ -278,6 +282,246 @@ _scan_readme_description() {
     done < "$readme"
 }
 
+# Validate a candidate DB name matches the same pattern as _db_validate_name
+# Returns 0 if valid, 1 otherwise. Empty input is invalid.
+_scan_db_name_valid() {
+    local n="$1"
+    [[ -z "$n" ]] && return 1
+    [[ ${#n} -gt 63 ]] && return 1
+    [[ "$n" =~ ^[a-zA-Z0-9_-]+$ ]]
+}
+
+# Map a URL scheme (postgres/postgresql/mysql/mongodb/mongodb+srv) to our type
+_scan_db_type_from_scheme() {
+    case "$1" in
+        postgres|postgresql) printf 'postgres' ;;
+        mysql|mariadb)       printf 'mysql' ;;
+        mongodb|mongodb+srv) printf 'mongodb' ;;
+    esac
+}
+
+# Map a Rails adapter name to our type
+_scan_db_type_from_adapter() {
+    case "$1" in
+        postgresql|postgres) printf 'postgres' ;;
+        mysql|mysql2|mariadb) printf 'mysql' ;;
+        mongo|mongoid) printf 'mongodb' ;;
+    esac
+}
+
+# Parse a DATABASE_URL-style value: scheme://user:pass@host:port/dbname?...
+# Sets SCAN_DB_TYPE / SCAN_DB_NAME globals (does not reset them).
+_scan_parse_db_url() {
+    local url="$1"
+    [[ -z "$url" ]] && return
+    # Strip surrounding quotes
+    url="${url#\"}"
+    url="${url%\"}"
+    url="${url#\'}"
+    url="${url%\'}"
+
+    local scheme="${url%%://*}"
+    [[ "$scheme" == "$url" ]] && return  # no scheme, not a URL
+
+    local t
+    t=$(_scan_db_type_from_scheme "$scheme")
+    [[ -z "$t" ]] && return
+
+    SCAN_DB_TYPE="$t"
+
+    # Strip scheme and authority to get path
+    local rest="${url#*://}"
+    local path="${rest#*/}"
+    [[ "$path" == "$rest" ]] && return  # no path component
+    # Strip query string
+    path="${path%%\?*}"
+    # Take the first path segment (db name)
+    local dbname="${path%%/*}"
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from Rails config/database.yml
+# Sets SCAN_DB_TYPE / SCAN_DB_NAME if found.
+_scan_db_rails() {
+    local repo_dir="$1"
+    local file="$repo_dir/config/database.yml"
+    [[ ! -f "$file" ]] && return
+
+    local adapter=""
+    adapter=$( { grep -m1 -E '^[[:space:]]*adapter:[[:space:]]*' "$file" 2>/dev/null || true; } \
+        | sed -E 's/^[[:space:]]*adapter:[[:space:]]*//;s/[[:space:]]*$//;s/[#].*$//;s/[[:space:]]*$//' )
+    local t
+    t=$(_scan_db_type_from_adapter "$adapter")
+    [[ -z "$t" ]] && return
+
+    SCAN_DB_TYPE="$t"
+
+    # Best-effort name: prefer development section, else first 'database:' line.
+    local dbname
+    dbname=$(awk '
+        /^development:/ { in_dev=1; next }
+        in_dev && /^[a-zA-Z]/ { in_dev=0 }
+        in_dev && /^[[:space:]]+database:[[:space:]]*/ {
+            sub(/^[[:space:]]+database:[[:space:]]*/, "")
+            sub(/[#].*$/, "")
+            sub(/[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$file" 2>/dev/null)
+    if [[ -z "$dbname" ]]; then
+        dbname=$( { grep -m1 -E '^[[:space:]]+database:[[:space:]]*' "$file" 2>/dev/null || true; } \
+            | sed -E 's/^[[:space:]]+database:[[:space:]]*//;s/[#].*$//;s/[[:space:]]*$//' )
+    fi
+    # Strip surrounding quotes and ERB-style interpolation; reject if it has <%
+    dbname="${dbname#\"}"; dbname="${dbname%\"}"
+    dbname="${dbname#\'}"; dbname="${dbname%\'}"
+    if [[ "$dbname" == *"<%"* ]] || [[ "$dbname" == *"\${"* ]]; then
+        return
+    fi
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from a Django settings.py (searches up to depth 3)
+_scan_db_django() {
+    local repo_dir="$1"
+    local file
+    file=$(find "$repo_dir" -maxdepth 3 -type f -name 'settings.py' 2>/dev/null | head -1)
+    [[ -z "$file" ]] && return
+
+    local engine=""
+    engine=$( { grep -oE "django\.db\.backends\.[a-z_]+" "$file" 2>/dev/null || true; } | head -1 )
+    engine="${engine##*.}"
+    local t
+    case "$engine" in
+        postgresql|postgresql_psycopg2) t="postgres" ;;
+        mysql) t="mysql" ;;
+    esac
+    [[ -z "$t" ]] && return
+    SCAN_DB_TYPE="$t"
+
+    local dbname=""
+    dbname=$( { grep -m1 -E "['\"]NAME['\"][[:space:]]*:" "$file" 2>/dev/null || true; } \
+        | sed -E "s/.*['\"]NAME['\"][[:space:]]*:[[:space:]]*['\"]([^'\"]+)['\"].*/\1/" )
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from .env-style files
+_scan_db_env() {
+    local repo_dir="$1"
+    local candidates=(
+        ".env" ".env.example" ".env.sample" ".env.development" ".env.local"
+    )
+    local f
+    for f in "${candidates[@]}"; do
+        local file="$repo_dir/$f"
+        [[ ! -f "$file" ]] && continue
+
+        # 1. DATABASE_URL / MONGO_URI / MONGODB_URI
+        local url=""
+        url=$( { grep -m1 -E '^(DATABASE_URL|MONGO_URI|MONGODB_URI)[[:space:]]*=' "$file" 2>/dev/null || true; } \
+            | sed -E 's/^[A-Z_]+[[:space:]]*=[[:space:]]*//' )
+        if [[ -n "$url" ]]; then
+            _scan_parse_db_url "$url"
+            [[ -n "$SCAN_DB_TYPE" ]] && return
+        fi
+
+        # 2. Per-engine env vars
+        if [[ -z "$SCAN_DB_TYPE" ]]; then
+            if grep -qE '^POSTGRES_(DB|USER|PASSWORD|HOST)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="postgres"
+            elif grep -qE '^MYSQL_(DATABASE|USER|PASSWORD|HOST)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="mysql"
+            elif grep -qE '^MONGO(_INITDB_DATABASE|DB_)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="mongodb"
+            fi
+        fi
+
+        if [[ -n "$SCAN_DB_TYPE" ]] && [[ -z "$SCAN_DB_NAME" ]]; then
+            local dbname=""
+            case "$SCAN_DB_TYPE" in
+                postgres)
+                    dbname=$( { grep -m1 -E '^POSTGRES_DB[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^POSTGRES_DB[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+                mysql)
+                    dbname=$( { grep -m1 -E '^MYSQL_DATABASE[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^MYSQL_DATABASE[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+                mongodb)
+                    dbname=$( { grep -m1 -E '^MONGO_INITDB_DATABASE[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^MONGO_INITDB_DATABASE[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+            esac
+            dbname="${dbname#\"}"; dbname="${dbname%\"}"
+            dbname="${dbname#\'}"; dbname="${dbname%\'}"
+            if _scan_db_name_valid "$dbname"; then
+                SCAN_DB_NAME="$dbname"
+            fi
+        fi
+
+        [[ -n "$SCAN_DB_TYPE" ]] && return
+    done
+}
+
+# Detect database from docker-compose files
+_scan_db_compose() {
+    local repo_dir="$1"
+    local candidates=("docker-compose.yml" "docker-compose.yaml" "compose.yml" "compose.yaml")
+    local f
+    for f in "${candidates[@]}"; do
+        local file="$repo_dir/$f"
+        [[ ! -f "$file" ]] && continue
+
+        if grep -qE 'image:[[:space:]]*["'"'"']?(postgres|postgis)' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="postgres"
+        elif grep -qE 'image:[[:space:]]*["'"'"']?(mysql|mariadb)' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="mysql"
+        elif grep -qE 'image:[[:space:]]*["'"'"']?mongo' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="mongodb"
+        fi
+
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            local dbname env_key
+            case "$SCAN_DB_TYPE" in
+                postgres) env_key="POSTGRES_DB" ;;
+                mysql)    env_key="MYSQL_DATABASE" ;;
+                mongodb)  env_key="MONGO_INITDB_DATABASE" ;;
+            esac
+            dbname=$( { grep -m1 -E "${env_key}[[:space:]]*[:=]" "$file" 2>/dev/null || true; } \
+                | sed -E "s/.*${env_key}[[:space:]]*[:=][[:space:]]*//;s/[[:space:]]*\$//" )
+            dbname="${dbname#\"}"; dbname="${dbname%\"}"
+            dbname="${dbname#\'}"; dbname="${dbname%\'}"
+            if _scan_db_name_valid "$dbname"; then
+                SCAN_DB_NAME="$dbname"
+            fi
+            return
+        fi
+    done
+}
+
+# Top-level database detection — tries sources in priority order, first hit wins.
+# Sets SCAN_DB_TYPE and (best-effort) SCAN_DB_NAME.
+_scan_database() {
+    local repo_dir="$1"
+    SCAN_DB_TYPE=""
+    SCAN_DB_NAME=""
+
+    _scan_db_rails "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_django "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_env "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_compose "$repo_dir"
+}
+
 # Scan a repository directory and populate SCAN_* globals.
 # Usage: scan_repo "/path/to/repo"
 scan_repo() {
@@ -374,6 +618,9 @@ scan_repo() {
     if [[ -f "$repo_dir/Dockerfile" ]] || [[ -f "$repo_dir/docker-compose.yml" ]] || [[ -f "$repo_dir/docker-compose.yaml" ]] || [[ -f "$repo_dir/compose.yml" ]] || [[ -f "$repo_dir/compose.yaml" ]]; then
         SCAN_HAS_DOCKER=1
     fi
+
+    # Database
+    _scan_database "$repo_dir"
 
     return 0
 }

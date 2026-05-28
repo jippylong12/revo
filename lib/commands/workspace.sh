@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Revo CLI - workspace / workspaces commands
 # Full-copy workspaces under .revo/workspaces/<name>/. Unlike git worktrees
-# these copy *everything* — .env, node_modules, build artifacts — so Claude
-# can start work immediately with zero bootstrap. Hardlinks are used where
-# possible so the cost is near-zero on APFS/HFS+ and Linux.
+# these copy working files, secrets, and local config, but skip bulky
+# dependency/cache/build directories that can be recreated inside the workspace.
 
 # --- helpers ---
 
@@ -22,8 +21,8 @@ _workspace_sanitize_name() {
     printf '%s' "$lowered"
 }
 
-# Verify .revo/ is in the workspace .gitignore. Workspaces hardlink-copy
-# everything, including .env files, so this is a hard requirement to avoid
+# Verify .revo/ is in the workspace .gitignore. Workspaces copy repo files,
+# including .env files, so this is a hard requirement to avoid
 # accidentally committing secrets via the parent git repo (if any).
 # Returns 0 if safe, 1 if .revo/ is not gitignored.
 _workspace_verify_gitignore_safe() {
@@ -47,13 +46,20 @@ _workspace_verify_gitignore_safe() {
     ' "$gitignore"
 }
 
-# Copy a source repo into the workspace. Tries hardlinks first
-# (`cp -RLl`), falls back to a regular recursive copy. Always follows
-# symlinks so init-style symlinked repos are materialized as real
-# directories inside the workspace.
-#
-# Real copy for all files (true isolation), then hardlink only heavy
-# immutable directories (node_modules, .venv, vendor, etc.) to save disk.
+# Return 0 if a basename should be excluded from workspace copies.
+_workspace_copy_should_skip() {
+    case "$1" in
+        node_modules|.venv|venv|.gradle|target|.next|.nuxt|__pycache__|.dart_tool|Pods)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Copy a source repo into the workspace. Follows symlinks so init-style
+# symlinked repos are materialized as real directories inside the workspace.
+# Bulky dependency/cache/build directories are skipped; reinstall them inside
+# the workspace if a command needs them.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -64,33 +70,48 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    # Real copy — every file is independent (true workspace isolation).
-    # Ignore broken symlinks (cp -RL fails on them); copy what we can.
-    cp -RL "$src" "$dest" 2>/dev/null
-    if [[ ! -d "$dest" ]]; then
-        return 1
+    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods"
+
+    if command -v rsync >/dev/null 2>&1; then
+        local rsync_args=(-aL)
+        local excluded
+        for excluded in $excludes; do
+            rsync_args+=(--exclude "$excluded/")
+        done
+
+        if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
+            return 0
+        fi
+
+        rm -rf "$dest" 2>/dev/null
     fi
 
-    # Replace heavy immutable directories with hardlinked copies to save disk.
-    # These directories are never edited directly — they're rebuilt by package
-    # managers, so hardlinks are safe here. If hardlink fails, keep the real copy.
-    local hardlink_dirs="node_modules .venv venv vendor .gradle build/node_modules target .next .nuxt __pycache__ .dart_tool Pods"
-    local dir_name
-    for dir_name in $hardlink_dirs; do
-        local src_dir="$src/$dir_name"
-        local dest_dir="$dest/$dir_name"
-        if [[ -d "$src_dir" ]] && [[ -d "$dest_dir" ]]; then
-            local backup="$dest_dir.__revo_bak"
-            mv "$dest_dir" "$backup"
-            if cp -RLl "$src_dir" "$dest_dir" 2>/dev/null; then
-                rm -rf "$backup"
-            else
-                # Hardlink failed — restore the real copy
-                rm -rf "$dest_dir" 2>/dev/null
-                mv "$backup" "$dest_dir"
-            fi
+    mkdir -p "$dest"
+
+    # Fallback for systems without rsync. This skips top-level bulky dirs and
+    # then prunes any nested copies that came along with regular cp.
+    local entry name
+    for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
+        [[ -e "$entry" ]] || continue
+        name=$(basename "$entry")
+        if _workspace_copy_should_skip "$name"; then
+            continue
         fi
+        cp -RL "$entry" "$dest/" 2>/dev/null || return 1
     done
+
+    find "$dest" -type d \( \
+        -name node_modules -o \
+        -name .venv -o \
+        -name venv -o \
+        -name .gradle -o \
+        -name target -o \
+        -name .next -o \
+        -name .nuxt -o \
+        -name __pycache__ -o \
+        -name .dart_tool -o \
+        -name Pods \
+    \) -prune -exec rm -rf {} + 2>/dev/null || true
 
     return 0
 }
@@ -312,7 +333,7 @@ _workspace_create() {
 
     if ! _workspace_verify_gitignore_safe; then
         ui_step_error ".revo/ is not in .gitignore at the workspace root"
-        ui_info "$(ui_dim "Workspaces hardlink-copy .env files and secrets — committing")"
+        ui_info "$(ui_dim "Workspaces copy .env files and secrets — committing")"
         ui_info "$(ui_dim ".revo/ would leak them. Add '.revo/' to .gitignore (or run 'revo init').")"
         if [[ $force -ne 1 ]]; then
             ui_info "$(ui_dim "Re-run with --force to override.")"

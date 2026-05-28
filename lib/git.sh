@@ -141,7 +141,7 @@ git_pull() {
     local args=()
     [[ "$rebase" == "--rebase" ]] && args+=("--rebase")
 
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" pull "${args[@]}" 2>&1); then
+    if ! GIT_OUTPUT=$(git -C "$repo_dir" pull "${args[@]+"${args[@]}"}" 2>&1); then
         GIT_ERROR="$GIT_OUTPUT"
         return 1
     fi

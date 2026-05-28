@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="0.10.1"
+REVO_VERSION="0.12.0"
 
 
 # === lib/ui.sh ===
@@ -1256,7 +1256,7 @@ git_pull() {
     local args=()
     [[ "$rebase" == "--rebase" ]] && args+=("--rebase")
 
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" pull "${args[@]}" 2>&1); then
+    if ! GIT_OUTPUT=$(git -C "$repo_dir" pull "${args[@]+"${args[@]}"}" 2>&1); then
         GIT_ERROR="$GIT_OUTPUT"
         return 1
     fi
@@ -1435,6 +1435,8 @@ SCAN_DESCRIPTION=""
 SCAN_PKG_DESCRIPTION=""
 SCAN_ENTRY_POINTS=""
 SCAN_TOP_DIRS=""
+SCAN_DB_TYPE=""
+SCAN_DB_NAME=""
 SCAN_HAS_CLAUDE_MD=0
 SCAN_HAS_DOCKER=0
 
@@ -1448,6 +1450,8 @@ scan_reset() {
     SCAN_PKG_DESCRIPTION=""
     SCAN_ENTRY_POINTS=""
     SCAN_TOP_DIRS=""
+    SCAN_DB_TYPE=""
+    SCAN_DB_NAME=""
     SCAN_HAS_CLAUDE_MD=0
     SCAN_HAS_DOCKER=0
 }
@@ -1587,7 +1591,7 @@ _scan_list_routes() {
     # Join as comma-separated
     local result=""
     local f
-    for f in "${found[@]}"; do
+    for f in "${found[@]+"${found[@]}"}"; do
         if [[ -z "$result" ]]; then
             result="$f"
         else
@@ -1702,6 +1706,246 @@ _scan_readme_description() {
     done < "$readme"
 }
 
+# Validate a candidate DB name matches the same pattern as _db_validate_name
+# Returns 0 if valid, 1 otherwise. Empty input is invalid.
+_scan_db_name_valid() {
+    local n="$1"
+    [[ -z "$n" ]] && return 1
+    [[ ${#n} -gt 63 ]] && return 1
+    [[ "$n" =~ ^[a-zA-Z0-9_-]+$ ]]
+}
+
+# Map a URL scheme (postgres/postgresql/mysql/mongodb/mongodb+srv) to our type
+_scan_db_type_from_scheme() {
+    case "$1" in
+        postgres|postgresql) printf 'postgres' ;;
+        mysql|mariadb)       printf 'mysql' ;;
+        mongodb|mongodb+srv) printf 'mongodb' ;;
+    esac
+}
+
+# Map a Rails adapter name to our type
+_scan_db_type_from_adapter() {
+    case "$1" in
+        postgresql|postgres) printf 'postgres' ;;
+        mysql|mysql2|mariadb) printf 'mysql' ;;
+        mongo|mongoid) printf 'mongodb' ;;
+    esac
+}
+
+# Parse a DATABASE_URL-style value: scheme://user:pass@host:port/dbname?...
+# Sets SCAN_DB_TYPE / SCAN_DB_NAME globals (does not reset them).
+_scan_parse_db_url() {
+    local url="$1"
+    [[ -z "$url" ]] && return
+    # Strip surrounding quotes
+    url="${url#\"}"
+    url="${url%\"}"
+    url="${url#\'}"
+    url="${url%\'}"
+
+    local scheme="${url%%://*}"
+    [[ "$scheme" == "$url" ]] && return  # no scheme, not a URL
+
+    local t
+    t=$(_scan_db_type_from_scheme "$scheme")
+    [[ -z "$t" ]] && return
+
+    SCAN_DB_TYPE="$t"
+
+    # Strip scheme and authority to get path
+    local rest="${url#*://}"
+    local path="${rest#*/}"
+    [[ "$path" == "$rest" ]] && return  # no path component
+    # Strip query string
+    path="${path%%\?*}"
+    # Take the first path segment (db name)
+    local dbname="${path%%/*}"
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from Rails config/database.yml
+# Sets SCAN_DB_TYPE / SCAN_DB_NAME if found.
+_scan_db_rails() {
+    local repo_dir="$1"
+    local file="$repo_dir/config/database.yml"
+    [[ ! -f "$file" ]] && return
+
+    local adapter=""
+    adapter=$( { grep -m1 -E '^[[:space:]]*adapter:[[:space:]]*' "$file" 2>/dev/null || true; } \
+        | sed -E 's/^[[:space:]]*adapter:[[:space:]]*//;s/[[:space:]]*$//;s/[#].*$//;s/[[:space:]]*$//' )
+    local t
+    t=$(_scan_db_type_from_adapter "$adapter")
+    [[ -z "$t" ]] && return
+
+    SCAN_DB_TYPE="$t"
+
+    # Best-effort name: prefer development section, else first 'database:' line.
+    local dbname
+    dbname=$(awk '
+        /^development:/ { in_dev=1; next }
+        in_dev && /^[a-zA-Z]/ { in_dev=0 }
+        in_dev && /^[[:space:]]+database:[[:space:]]*/ {
+            sub(/^[[:space:]]+database:[[:space:]]*/, "")
+            sub(/[#].*$/, "")
+            sub(/[[:space:]]+$/, "")
+            print
+            exit
+        }
+    ' "$file" 2>/dev/null)
+    if [[ -z "$dbname" ]]; then
+        dbname=$( { grep -m1 -E '^[[:space:]]+database:[[:space:]]*' "$file" 2>/dev/null || true; } \
+            | sed -E 's/^[[:space:]]+database:[[:space:]]*//;s/[#].*$//;s/[[:space:]]*$//' )
+    fi
+    # Strip surrounding quotes and ERB-style interpolation; reject if it has <%
+    dbname="${dbname#\"}"; dbname="${dbname%\"}"
+    dbname="${dbname#\'}"; dbname="${dbname%\'}"
+    if [[ "$dbname" == *"<%"* ]] || [[ "$dbname" == *"\${"* ]]; then
+        return
+    fi
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from a Django settings.py (searches up to depth 3)
+_scan_db_django() {
+    local repo_dir="$1"
+    local file
+    file=$(find "$repo_dir" -maxdepth 3 -type f -name 'settings.py' 2>/dev/null | head -1)
+    [[ -z "$file" ]] && return
+
+    local engine=""
+    engine=$( { grep -oE "django\.db\.backends\.[a-z_]+" "$file" 2>/dev/null || true; } | head -1 )
+    engine="${engine##*.}"
+    local t
+    case "$engine" in
+        postgresql|postgresql_psycopg2) t="postgres" ;;
+        mysql) t="mysql" ;;
+    esac
+    [[ -z "$t" ]] && return
+    SCAN_DB_TYPE="$t"
+
+    local dbname=""
+    dbname=$( { grep -m1 -E "['\"]NAME['\"][[:space:]]*:" "$file" 2>/dev/null || true; } \
+        | sed -E "s/.*['\"]NAME['\"][[:space:]]*:[[:space:]]*['\"]([^'\"]+)['\"].*/\1/" )
+    if _scan_db_name_valid "$dbname"; then
+        SCAN_DB_NAME="$dbname"
+    fi
+}
+
+# Detect database from .env-style files
+_scan_db_env() {
+    local repo_dir="$1"
+    local candidates=(
+        ".env" ".env.example" ".env.sample" ".env.development" ".env.local"
+    )
+    local f
+    for f in "${candidates[@]}"; do
+        local file="$repo_dir/$f"
+        [[ ! -f "$file" ]] && continue
+
+        # 1. DATABASE_URL / MONGO_URI / MONGODB_URI
+        local url=""
+        url=$( { grep -m1 -E '^(DATABASE_URL|MONGO_URI|MONGODB_URI)[[:space:]]*=' "$file" 2>/dev/null || true; } \
+            | sed -E 's/^[A-Z_]+[[:space:]]*=[[:space:]]*//' )
+        if [[ -n "$url" ]]; then
+            _scan_parse_db_url "$url"
+            [[ -n "$SCAN_DB_TYPE" ]] && return
+        fi
+
+        # 2. Per-engine env vars
+        if [[ -z "$SCAN_DB_TYPE" ]]; then
+            if grep -qE '^POSTGRES_(DB|USER|PASSWORD|HOST)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="postgres"
+            elif grep -qE '^MYSQL_(DATABASE|USER|PASSWORD|HOST)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="mysql"
+            elif grep -qE '^MONGO(_INITDB_DATABASE|DB_)' "$file" 2>/dev/null; then
+                SCAN_DB_TYPE="mongodb"
+            fi
+        fi
+
+        if [[ -n "$SCAN_DB_TYPE" ]] && [[ -z "$SCAN_DB_NAME" ]]; then
+            local dbname=""
+            case "$SCAN_DB_TYPE" in
+                postgres)
+                    dbname=$( { grep -m1 -E '^POSTGRES_DB[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^POSTGRES_DB[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+                mysql)
+                    dbname=$( { grep -m1 -E '^MYSQL_DATABASE[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^MYSQL_DATABASE[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+                mongodb)
+                    dbname=$( { grep -m1 -E '^MONGO_INITDB_DATABASE[[:space:]]*=' "$file" 2>/dev/null || true; } \
+                        | sed -E 's/^MONGO_INITDB_DATABASE[[:space:]]*=[[:space:]]*//;s/[[:space:]]*$//' ) ;;
+            esac
+            dbname="${dbname#\"}"; dbname="${dbname%\"}"
+            dbname="${dbname#\'}"; dbname="${dbname%\'}"
+            if _scan_db_name_valid "$dbname"; then
+                SCAN_DB_NAME="$dbname"
+            fi
+        fi
+
+        [[ -n "$SCAN_DB_TYPE" ]] && return
+    done
+}
+
+# Detect database from docker-compose files
+_scan_db_compose() {
+    local repo_dir="$1"
+    local candidates=("docker-compose.yml" "docker-compose.yaml" "compose.yml" "compose.yaml")
+    local f
+    for f in "${candidates[@]}"; do
+        local file="$repo_dir/$f"
+        [[ ! -f "$file" ]] && continue
+
+        if grep -qE 'image:[[:space:]]*["'"'"']?(postgres|postgis)' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="postgres"
+        elif grep -qE 'image:[[:space:]]*["'"'"']?(mysql|mariadb)' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="mysql"
+        elif grep -qE 'image:[[:space:]]*["'"'"']?mongo' "$file" 2>/dev/null; then
+            SCAN_DB_TYPE="mongodb"
+        fi
+
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            local dbname env_key
+            case "$SCAN_DB_TYPE" in
+                postgres) env_key="POSTGRES_DB" ;;
+                mysql)    env_key="MYSQL_DATABASE" ;;
+                mongodb)  env_key="MONGO_INITDB_DATABASE" ;;
+            esac
+            dbname=$( { grep -m1 -E "${env_key}[[:space:]]*[:=]" "$file" 2>/dev/null || true; } \
+                | sed -E "s/.*${env_key}[[:space:]]*[:=][[:space:]]*//;s/[[:space:]]*\$//" )
+            dbname="${dbname#\"}"; dbname="${dbname%\"}"
+            dbname="${dbname#\'}"; dbname="${dbname%\'}"
+            if _scan_db_name_valid "$dbname"; then
+                SCAN_DB_NAME="$dbname"
+            fi
+            return
+        fi
+    done
+}
+
+# Top-level database detection — tries sources in priority order, first hit wins.
+# Sets SCAN_DB_TYPE and (best-effort) SCAN_DB_NAME.
+_scan_database() {
+    local repo_dir="$1"
+    SCAN_DB_TYPE=""
+    SCAN_DB_NAME=""
+
+    _scan_db_rails "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_django "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_env "$repo_dir"
+    [[ -n "$SCAN_DB_TYPE" ]] && return
+
+    _scan_db_compose "$repo_dir"
+}
+
 # Scan a repository directory and populate SCAN_* globals.
 # Usage: scan_repo "/path/to/repo"
 scan_repo() {
@@ -1798,6 +2042,9 @@ scan_repo() {
     if [[ -f "$repo_dir/Dockerfile" ]] || [[ -f "$repo_dir/docker-compose.yml" ]] || [[ -f "$repo_dir/docker-compose.yaml" ]] || [[ -f "$repo_dir/compose.yml" ]] || [[ -f "$repo_dir/compose.yaml" ]]; then
         SCAN_HAS_DOCKER=1
     fi
+
+    # Database
+    _scan_database "$repo_dir"
 
     return 0
 }
@@ -2064,16 +2311,35 @@ _init_auto_tags() {
     local name="$2"
     local category=""
 
-    if [[ -f "$dir/package.json" ]]; then
-        if grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit|expo|react-native)"' "$dir/package.json" 2>/dev/null; then
-            category="frontend"
+    # Backend signals first — these win even when package.json also exists
+    # (e.g. Rails app with Vue assets in package.json)
+    if [[ -f "$dir/Gemfile" ]]; then
+        category="backend"
+    elif [[ -f "$dir/manage.py" ]]; then
+        category="backend"
+    elif [[ -f "$dir/go.mod" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/pom.xml" ]] \
+        || [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
+        category="backend"
+    elif [[ -f "$dir/config/database.yml" ]] || [[ -d "$dir/db/migrate" ]] || [[ -f "$dir/db/schema.rb" ]]; then
+        category="backend"
+    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]] || [[ -f "$dir/Pipfile" ]]; then
+        category="backend"
+    fi
+
+    # Mobile/frontend signals from package.json (only if no backend signal yet)
+    if [[ -z "$category" ]] && [[ -f "$dir/package.json" ]]; then
+        if grep -qE '"(react-native|expo)"' "$dir/package.json" 2>/dev/null; then
+            category="mobile"
         elif grep -qE '"(express|fastify|hono|@nestjs/core|nestjs|koa)"' "$dir/package.json" 2>/dev/null; then
             category="backend"
+        elif grep -qE '"(next|nuxt|react|vue|svelte|@angular/core|astro|@remix-run/react|@sveltejs/kit)"' "$dir/package.json" 2>/dev/null; then
+            category="frontend"
         fi
-    elif [[ -f "$dir/go.mod" ]] || [[ -f "$dir/Cargo.toml" ]] || [[ -f "$dir/pom.xml" ]] || [[ -f "$dir/build.gradle" ]] || [[ -f "$dir/build.gradle.kts" ]]; then
-        category="backend"
-    elif [[ -f "$dir/pyproject.toml" ]] || [[ -f "$dir/requirements.txt" ]]; then
-        category="backend"
+    fi
+
+    # Flutter/Dart mobile
+    if [[ -z "$category" ]] && [[ -f "$dir/pubspec.yaml" ]]; then
+        category="mobile"
     fi
 
     if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
@@ -2298,8 +2564,22 @@ cmd_init() {
             tags=$(_init_auto_tags "$dir" "$name")
             local branch
             branch=$(git_default_branch "$dir")
-            yaml_add_repo "$remote" "$path" "$tags" "" "$branch"
+
+            # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
+            scan_reset
+            scan_repo "$dir"
+
+            yaml_add_repo "$remote" "$path" "$tags" "" "$branch" \
+                "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
+
             ui_step_done "Detected:" "$name → $remote (branch: $branch)"
+            if [[ -n "$SCAN_DB_TYPE" ]]; then
+                if [[ -n "$SCAN_DB_NAME" ]]; then
+                    ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
+                else
+                    ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
+                fi
+            fi
             detected_count=$((detected_count + 1))
         done <<< "$_INIT_FOUND_DIRS"
 
@@ -3839,8 +4119,9 @@ _context_write_commands_file() {
         printf -- '- `revo workspace <name> --delete [--force]` — remove a workspace\n'
         printf -- '- `revo workspace --clean` — remove workspaces whose branches are merged\n'
         printf '\n'
-        printf 'Workspaces hardlink-copy everything (including `.env`, `node_modules`,\n'
-        printf 'build artifacts) so you can start work with zero bootstrap. Run\n'
+        printf 'Workspaces copy repo files, secrets, and local config, but skip bulky\n'
+        printf 'dependency/cache/build directories such as `node_modules`. Reinstall\n'
+        printf 'dependencies inside the workspace when a command needs them. Run\n'
         printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
         printf 'workspace copies, not the source tree.\n'
         printf '\n'
@@ -4095,6 +4376,13 @@ _context_analyze() {
         fi
         if [[ $SCAN_HAS_CLAUDE_MD -eq 1 ]]; then
             printf '**Has CLAUDE.md:** yes\n'
+        fi
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            if [[ -n "$SCAN_DB_NAME" ]]; then
+                printf '**Database (detected):** %s (%s)\n' "$SCAN_DB_NAME" "$SCAN_DB_TYPE"
+            else
+                printf '**Database (detected):** %s (name unknown)\n' "$SCAN_DB_TYPE"
+            fi
         fi
 
         # README first line (even if not used as description, useful for analysis)
@@ -4387,7 +4675,7 @@ cmd_feature() {
             printf '## Repos\n'
 
             local idx
-            for idx in "${involved_indices[@]}"; do
+            for idx in "${involved_indices[@]+"${involved_indices[@]}"}"; do
                 local rpath rtags
                 rpath=$(yaml_get_path "$idx")
                 rtags=$(yaml_get_tags "$idx")
@@ -4969,11 +5257,11 @@ _issue_list() {
     fi
 
     if [[ $as_json -eq 1 ]]; then
-        _issue_list_json "$repos" "$state" "$limit" "${gh_extra[@]}"
+        _issue_list_json "$repos" "$state" "$limit" "${gh_extra[@]+"${gh_extra[@]}"}"
         return $?
     fi
 
-    _issue_list_human "$repos" "$state" "$limit" "${gh_extra[@]}"
+    _issue_list_human "$repos" "$state" "$limit" "${gh_extra[@]+"${gh_extra[@]}"}"
 }
 
 # Print a flat JSON array of issues across all repos. Each entry has a
@@ -5003,7 +5291,7 @@ _issue_list_json() {
         # field, and stream the results into our concatenated array.
         local lines
         if lines=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" \
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
             --json number,title,state,labels,assignees,url,updatedAt,author \
             --jq ".[] | {repo: \"$path\"} + ." 2>/dev/null); then
             local line
@@ -5056,7 +5344,7 @@ _issue_list_human() {
 
         local count_output
         if ! count_output=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" \
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" \
             --json number --jq 'length' 2>&1); then
             ui_step_error "Failed: $count_output"
             continue
@@ -5070,7 +5358,7 @@ _issue_list_human() {
 
         local pretty
         if pretty=$(cd "$full_path" && gh issue list \
-            --state "$state" --limit "$limit" "${gh_extra[@]}" 2>&1); then
+            --state "$state" --limit "$limit" "${gh_extra[@]+"${gh_extra[@]}"}" 2>&1); then
             local line
             while IFS= read -r line; do
                 printf '%s  %s\n' "$(ui_bar)" "$line"
@@ -5298,9 +5586,8 @@ _issue_create() {
 # === lib/commands/workspace.sh ===
 # Revo CLI - workspace / workspaces commands
 # Full-copy workspaces under .revo/workspaces/<name>/. Unlike git worktrees
-# these copy *everything* — .env, node_modules, build artifacts — so Claude
-# can start work immediately with zero bootstrap. Hardlinks are used where
-# possible so the cost is near-zero on APFS/HFS+ and Linux.
+# these copy working files, secrets, and local config, but skip bulky
+# dependency/cache/build directories that can be recreated inside the workspace.
 
 # --- helpers ---
 
@@ -5319,8 +5606,8 @@ _workspace_sanitize_name() {
     printf '%s' "$lowered"
 }
 
-# Verify .revo/ is in the workspace .gitignore. Workspaces hardlink-copy
-# everything, including .env files, so this is a hard requirement to avoid
+# Verify .revo/ is in the workspace .gitignore. Workspaces copy repo files,
+# including .env files, so this is a hard requirement to avoid
 # accidentally committing secrets via the parent git repo (if any).
 # Returns 0 if safe, 1 if .revo/ is not gitignored.
 _workspace_verify_gitignore_safe() {
@@ -5344,13 +5631,20 @@ _workspace_verify_gitignore_safe() {
     ' "$gitignore"
 }
 
-# Copy a source repo into the workspace. Tries hardlinks first
-# (`cp -RLl`), falls back to a regular recursive copy. Always follows
-# symlinks so init-style symlinked repos are materialized as real
-# directories inside the workspace.
-#
-# Real copy for all files (true isolation), then hardlink only heavy
-# immutable directories (node_modules, .venv, vendor, etc.) to save disk.
+# Return 0 if a basename should be excluded from workspace copies.
+_workspace_copy_should_skip() {
+    case "$1" in
+        node_modules|.venv|venv|.gradle|target|.next|.nuxt|__pycache__|.dart_tool|Pods)
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# Copy a source repo into the workspace. Follows symlinks so init-style
+# symlinked repos are materialized as real directories inside the workspace.
+# Bulky dependency/cache/build directories are skipped; reinstall them inside
+# the workspace if a command needs them.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -5361,33 +5655,48 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    # Real copy — every file is independent (true workspace isolation).
-    # Ignore broken symlinks (cp -RL fails on them); copy what we can.
-    cp -RL "$src" "$dest" 2>/dev/null
-    if [[ ! -d "$dest" ]]; then
-        return 1
+    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods"
+
+    if command -v rsync >/dev/null 2>&1; then
+        local rsync_args=(-aL)
+        local excluded
+        for excluded in $excludes; do
+            rsync_args+=(--exclude "$excluded/")
+        done
+
+        if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
+            return 0
+        fi
+
+        rm -rf "$dest" 2>/dev/null
     fi
 
-    # Replace heavy immutable directories with hardlinked copies to save disk.
-    # These directories are never edited directly — they're rebuilt by package
-    # managers, so hardlinks are safe here. If hardlink fails, keep the real copy.
-    local hardlink_dirs="node_modules .venv venv vendor .gradle build/node_modules target .next .nuxt __pycache__ .dart_tool Pods"
-    local dir_name
-    for dir_name in $hardlink_dirs; do
-        local src_dir="$src/$dir_name"
-        local dest_dir="$dest/$dir_name"
-        if [[ -d "$src_dir" ]] && [[ -d "$dest_dir" ]]; then
-            local backup="$dest_dir.__revo_bak"
-            mv "$dest_dir" "$backup"
-            if cp -RLl "$src_dir" "$dest_dir" 2>/dev/null; then
-                rm -rf "$backup"
-            else
-                # Hardlink failed — restore the real copy
-                rm -rf "$dest_dir" 2>/dev/null
-                mv "$backup" "$dest_dir"
-            fi
+    mkdir -p "$dest"
+
+    # Fallback for systems without rsync. This skips top-level bulky dirs and
+    # then prunes any nested copies that came along with regular cp.
+    local entry name
+    for entry in "$src"/* "$src"/.[!.]* "$src"/..?*; do
+        [[ -e "$entry" ]] || continue
+        name=$(basename "$entry")
+        if _workspace_copy_should_skip "$name"; then
+            continue
         fi
+        cp -RL "$entry" "$dest/" 2>/dev/null || return 1
     done
+
+    find "$dest" -type d \( \
+        -name node_modules -o \
+        -name .venv -o \
+        -name venv -o \
+        -name .gradle -o \
+        -name target -o \
+        -name .next -o \
+        -name .nuxt -o \
+        -name __pycache__ -o \
+        -name .dart_tool -o \
+        -name Pods \
+    \) -prune -exec rm -rf {} + 2>/dev/null || true
 
     return 0
 }
@@ -5609,7 +5918,7 @@ _workspace_create() {
 
     if ! _workspace_verify_gitignore_safe; then
         ui_step_error ".revo/ is not in .gitignore at the workspace root"
-        ui_info "$(ui_dim "Workspaces hardlink-copy .env files and secrets — committing")"
+        ui_info "$(ui_dim "Workspaces copy .env files and secrets — committing")"
         ui_info "$(ui_dim ".revo/ would leak them. Add '.revo/' to .gitignore (or run 'revo init').")"
         if [[ $force -ne 1 ]]; then
             ui_info "$(ui_dim "Re-run with --force to override.")"

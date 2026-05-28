@@ -46,7 +46,7 @@ Revo ships with Claude Code skills that you can invoke directly:
 
 ### Workspace isolation
 
-`revo workspace <name>` creates a full independent copy of your repos with a `feature/<name>` branch. Edit freely — nothing touches the original. When databases are configured, it clones those too.
+`revo workspace <name>` creates an independent copy of your repos with a `feature/<name>` branch. It copies working files, secrets, and local config, but skips bulky dependency/cache/build directories such as `node_modules`; reinstall dependencies inside the workspace when a command needs them. Edit freely — nothing touches the original. When databases are configured, it clones those too.
 
 ```bash
 revo workspace auth-overhaul
