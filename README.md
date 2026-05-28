@@ -11,6 +11,7 @@ The intended workflow is: **set up once, then stay in Claude.** You shouldn't ne
 
 ```bash
 npm install -g @revotools/cli
+revo --version
 
 cd ~/code/my-project        # your folder of repos (or an empty directory)
 revo init                   # auto-detects existing repos, writes CLAUDE.md
@@ -55,6 +56,10 @@ revo workspace auth-overhaul
 # cd /Users/you/project/.revo/workspaces/auth-overhaul
 ```
 
+When you run `revo` from inside `.revo/workspaces/<name>/`, commands automatically target the workspace copies instead of the original repos under `repos/`. Revo requires `.revo/` to be ignored at the workspace root before creating a workspace, because workspace copies include local config and `.env` files by design.
+
+Workspace copies preserve normal in-repo symlinks but prune symlinks that point outside the repo, and they skip generated directories such as `node_modules`, `.venv`, `.gradle`, `target`, `.next`, `dist`, `build`, `coverage`, `.cache`, `.turbo`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, and `.pnpm-store`.
+
 ### Database cloning
 
 Add `database:` to repos in `revo.yaml` and workspaces automatically clone the database on create, drop it on delete:
@@ -70,6 +75,8 @@ repos:
 
 Or via CLI: `revo add <url> --database postgres:myapp_dev`
 
+Workspace database names are suffixed with `_ws_<workspace>` and guarded so Revo only drops workspace databases it created. MySQL, PostgreSQL, and MongoDB clone/drop flows use the local database CLIs.
+
 ### Context generation
 
 `revo init` scans every repo and writes a `CLAUDE.md` that tells Claude:
@@ -81,6 +88,8 @@ Or via CLI: `revo add <url> --database postgres:myapp_dev`
 
 On first init, revo detects repos and prompts Claude to analyze each one and generate accurate descriptions — or lets you provide your own. Descriptions and types are stored in `revo.yaml` and used in the generated `CLAUDE.md`.
 
+Use `revo context --auto` to regenerate context without prompts, or `revo context --analyze` to print the per-repo scan report. Detected database structure is shown in context, but raw `.env` connection strings and passwords are not emitted.
+
 ### Coordinated operations
 
 All commands work across repos in one shot, with `--tag` filtering:
@@ -91,6 +100,21 @@ revo push                              # push all branches
 revo pr "Auth endpoint"                # coordinated PRs via gh CLI
 revo sync --tag backend                # pull latest on backend repos
 ```
+
+`revo status` reports dirty repos, branch state, ahead/behind counts, and repos with no upstream. `revo checkout <branch>` only checks out real local or `origin/<branch>` branches; it does not treat tags or arbitrary revisions as branches.
+
+### GitHub issue workflows
+
+Revo can list and create GitHub issues across configured repos using the GitHub CLI:
+
+```bash
+revo issue list --state open
+revo issue list --tag backend --json
+revo issue create --repo backend "Add stats endpoint"
+revo issue create --tag mobile --feature stats "Add statistics screen"
+```
+
+`revo issue list --json` emits one flat JSON array across repos and is suitable for piping into tools such as `jq`.
 
 ### Auto-logged feature tracking
 
@@ -107,6 +131,8 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo clone [--tag TAG]` | Clone configured repos |
 | `revo feature <name>` | Create feature branch + context file across repos |
 | `revo workspace <name>` | Create isolated workspace with DB cloning |
+| `revo workspace <name> --delete [--force]` | Delete a workspace and drop its workspace databases |
+| `revo workspace --clean` | Remove workspaces whose branches are merged |
 | `revo workspace list` | List active workspaces |
 | `revo commit <msg>` | Commit across dirty repos |
 | `revo push` | Push branches across repos |
@@ -119,6 +145,8 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo list` | List configured repos |
 
 All commands accept `--tag TAG` to target a subset of repos.
+
+Repository paths must be safe relative paths. `revo add --path` and config parsing reject absolute paths, traversal (`..`), empty path components, spaces, and shell-hostile characters before clone or workspace commands use those paths.
 
 ## Configuration
 
