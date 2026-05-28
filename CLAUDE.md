@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Revo is a Claude-first multi-repo workspace manager — a fork of [Mars](https://github.com/dean0x/mars)
+Revo is an agent-first multi-repo workspace manager — a fork of [Mars](https://github.com/dean0x/mars)
 with additions that make coding agents more effective across repositories.
 
 It is written in Bash (3.2+, macOS compatible) with no external dependencies
@@ -15,10 +15,10 @@ beyond `git` (and optionally `gh` for `revo pr`).
 Mars provides the workspace layer: `init`, `add`, `clone`, `status`, `sync`,
 `branch`, `checkout`, `list`. Revo keeps all of those and adds:
 
-- **`revo context`** — scans cloned repos and generates a root-level `CLAUDE.md`
-  that gives Claude Code a full picture of the workspace (frameworks, routes,
-  dependency order, active feature briefs, and a built-in revo command
-  reference).
+- **`revo context`** — scans cloned repos and generates configured root-level
+  agent files (`AGENTS.md`, `CLAUDE.md`, or both) that give coding agents a
+  full picture of the workspace (frameworks, routes, dependency order, active
+  feature briefs, tracker provider, and a built-in revo command reference).
 - **`revo detect`** — bootstraps a workspace around git repos that already
   exist in the current directory (the "I have a folder full of clones" case).
 - **`revo feature <name>`** — creates a coordinated `feature/<name>` branch
@@ -26,7 +26,7 @@ Mars provides the workspace layer: `init`, `add`, `clone`, `status`, `sync`,
 - **`revo commit`**, **`revo push`**, **`revo pr`** — coordinated commit,
   push, and GitHub PR creation across matching repos.
 - **`depends_on`** field in `revo.yaml` — drives the dependency order in the
-  generated CLAUDE.md.
+  generated agent files.
 
 Revo also diverges from Mars on two existing commands:
 
@@ -35,7 +35,7 @@ Revo also diverges from Mars on two existing commands:
   links root-level repos into `repos/` via relative symlinks, and runs
   `revo context` immediately. The workspace name prompt now defaults to the
   cwd basename so init can run non-interactively.
-- **`revo clone`** always regenerates the workspace `CLAUDE.md` after a
+- **`revo clone`** always regenerates the workspace agent files after a
   successful clone batch (not just on first clone).
 
 `revo.yaml` is the primary config file. `mars.yaml` is still honored as a
@@ -45,7 +45,7 @@ fallback for migration.
 
 - **Zero dependencies** — pure bash 3.2, plus `git` and optionally `gh`.
   Do not add jq, python, node, etc.
-- **Claude-first** — commands should make Claude Code more effective.
+- **Agent-first** — commands should make coding agents more effective.
   Context generation, feature workspaces, and coordinated PRs all exist to
   give the agent a better picture and a cleaner workflow.
 - **Workspace over orchestration** — Revo does not build, deploy, or run
@@ -86,14 +86,14 @@ lib/
     ├── init.sh       # workspace commands (init auto-detects existing repos)
     ├── detect.sh     # bootstrap revo around an existing folder of clones
     ├── add.sh
-    ├── clone.sh      # always regenerates CLAUDE.md after a clone batch
+    ├── clone.sh      # always regenerates agent files after a clone batch
     ├── list.sh
     ├── status.sh
     ├── sync.sh
     ├── branch.sh
     ├── checkout.sh
     ├── exec.sh
-    ├── context.sh    # Claude-first commands (new in Revo)
+    ├── context.sh    # agent-first commands (new in Revo)
     ├── feature.sh
     ├── commit.sh
     ├── push.sh
@@ -128,7 +128,7 @@ YAML_REPO_DEPS=()
 
 **Command Pattern** — Each command is `cmd_<name>()` in its own file under `lib/commands/`.
 
-**No subshells for writes** — `revo context` writes directly to CLAUDE.md
+**No subshells for writes** — `revo context` writes directly to agent files
 instead of building a string in a piped `while` loop, because subshells lose
 global variable updates in bash 3.2.
 
@@ -137,6 +137,13 @@ global variable updates in bash 3.2.
 version: 1
 workspace:
   name: "project-name"
+agents:
+  files: [AGENTS.md, CLAUDE.md]
+tracker:
+  provider: github
+  linear:
+    team: ""
+    project: ""
 repos:
   - url: git@github.com:org/shared-types.git
     tags: [shared]
@@ -156,7 +163,11 @@ defaults:
 
 `depends_on` is optional. It references other repos by their path basename
 (derived from the URL unless overridden by `path`). It drives the topological
-sort in the generated CLAUDE.md and has no effect on clone/sync order.
+sort in the generated agent files and has no effect on clone/sync order.
+
+`agents.files` controls which root-level instruction files are generated.
+`tracker.provider` controls whether tracker work is routed to GitHub issues,
+Linear MCP/app, or no tracker.
 
 `database` is optional. When present, `revo workspace` clones the named
 database to a workspace-scoped copy (e.g., `myapp_dev_ws_feature_name`)

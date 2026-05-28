@@ -141,6 +141,10 @@ config_init() {
     # Set workspace name for yaml module
     YAML_WORKSPACE_NAME="$workspace_name"
     YAML_DEFAULTS_BRANCH="main"
+    YAML_AGENT_FILES="AGENTS.md,CLAUDE.md"
+    YAML_TRACKER_PROVIDER="github"
+    YAML_TRACKER_LINEAR_TEAM=""
+    YAML_TRACKER_LINEAR_PROJECT=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()

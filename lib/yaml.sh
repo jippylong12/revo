@@ -6,6 +6,10 @@
 # Global state - using parallel indexed arrays instead of associative arrays
 YAML_WORKSPACE_NAME=""
 YAML_DEFAULTS_BRANCH=""
+YAML_AGENT_FILES=""
+YAML_TRACKER_PROVIDER=""
+YAML_TRACKER_LINEAR_TEAM=""
+YAML_TRACKER_LINEAR_PROJECT=""
 YAML_REPO_COUNT=0
 
 # Arrays indexed by repo number (0, 1, 2, ...)
@@ -107,6 +111,9 @@ _yaml_parse_inline_list() {
 yaml_parse() {
     local file="$1"
     local line
+    local in_agents=0
+    local in_tracker=0
+    local in_tracker_linear=0
     local in_repos=0
     local in_defaults=0
     local in_database=0
@@ -115,6 +122,10 @@ yaml_parse() {
     # Reset state
     YAML_WORKSPACE_NAME=""
     YAML_DEFAULTS_BRANCH="main"
+    YAML_AGENT_FILES=""
+    YAML_TRACKER_PROVIDER=""
+    YAML_TRACKER_LINEAR_TEAM=""
+    YAML_TRACKER_LINEAR_PROJECT=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
@@ -140,15 +151,38 @@ yaml_parse() {
         trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
 
         # Check section markers
-        if [[ "$trimmed" == "repos:" ]]; then
+        if [[ "$trimmed" == "agents:" ]]; then
+            in_agents=1
+            in_tracker=0
+            in_tracker_linear=0
+            in_repos=0
+            in_defaults=0
+            continue
+        elif [[ "$trimmed" == "tracker:" ]]; then
+            in_agents=0
+            in_tracker=1
+            in_tracker_linear=0
+            in_repos=0
+            in_defaults=0
+            continue
+        elif [[ "$trimmed" == "repos:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=1
             in_defaults=0
             continue
         elif [[ "$trimmed" == "defaults:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=0
             in_defaults=1
             continue
         elif [[ "$trimmed" == "workspace:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=0
             in_defaults=0
             continue
@@ -163,6 +197,66 @@ yaml_parse() {
             fi
             YAML_WORKSPACE_NAME="$workspace_name"
             continue
+        fi
+
+        # Parse agents section
+        if [[ $in_agents -eq 1 ]]; then
+            if [[ "$trimmed" =~ ^files:[[:space:]]*(.*)$ ]]; then
+                local agent_files
+                if ! agent_files=$(_yaml_parse_inline_list "${trimmed#files:}"); then
+                    printf 'Error: invalid agents files list\n' >&2
+                    return 1
+                fi
+                if ! yaml_validate_agent_files "$agent_files"; then
+                    printf 'Error: unsupported agents files list: %s\n' "$agent_files" >&2
+                    return 1
+                fi
+                YAML_AGENT_FILES="$agent_files"
+            fi
+            continue
+        fi
+
+        # Parse tracker section
+        if [[ $in_tracker -eq 1 ]]; then
+            if [[ "$trimmed" =~ ^provider:[[:space:]]*(.+)$ ]]; then
+                local tracker_provider
+                if ! tracker_provider=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker provider\n' >&2
+                    return 1
+                fi
+                case "$tracker_provider" in
+                    github|linear|none)
+                        YAML_TRACKER_PROVIDER="$tracker_provider"
+                        ;;
+                    *)
+                        printf 'Error: unsupported tracker provider: %s\n' "$tracker_provider" >&2
+                        return 1
+                        ;;
+                esac
+                in_tracker_linear=0
+                continue
+            fi
+
+            if [[ "$trimmed" == "linear:" ]]; then
+                in_tracker_linear=1
+                continue
+            elif [[ $in_tracker_linear -eq 1 ]] && [[ "$trimmed" =~ ^team:[[:space:]]*(.*)$ ]]; then
+                local linear_team
+                if ! linear_team=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker linear team\n' >&2
+                    return 1
+                fi
+                YAML_TRACKER_LINEAR_TEAM="$linear_team"
+                continue
+            elif [[ $in_tracker_linear -eq 1 ]] && [[ "$trimmed" =~ ^project:[[:space:]]*(.*)$ ]]; then
+                local linear_project
+                if ! linear_project=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker linear project\n' >&2
+                    return 1
+                fi
+                YAML_TRACKER_LINEAR_PROJECT="$linear_project"
+                continue
+            fi
         fi
 
         # Parse defaults section
@@ -321,6 +415,29 @@ yaml_validate_repo_path() {
     return 0
 }
 
+yaml_validate_agent_files() {
+    local files="$1"
+
+    [[ -z "$files" ]] && return 1
+
+    local old_ifs="$IFS"
+    local file
+    IFS=','
+    for file in $files; do
+        case "$file" in
+            AGENTS.md|CLAUDE.md)
+                ;;
+            *)
+                IFS="$old_ifs"
+                return 1
+                ;;
+        esac
+    done
+    IFS="$old_ifs"
+
+    return 0
+}
+
 # Extract repo name from URL
 # Usage: yaml_path_from_url "git@github.com:org/repo.git"
 # Returns: "repo"
@@ -418,6 +535,38 @@ yaml_get_db_name() {
     printf '%s' "${YAML_REPO_DB_NAMES[$idx]:-}"
 }
 
+yaml_get_agent_files() {
+    printf '%s' "${YAML_AGENT_FILES:-}"
+}
+
+yaml_get_effective_agent_files() {
+    if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
+        printf '%s' "$YAML_AGENT_FILES"
+    else
+        printf 'CLAUDE.md'
+    fi
+}
+
+yaml_get_tracker_provider() {
+    printf '%s' "${YAML_TRACKER_PROVIDER:-}"
+}
+
+yaml_get_effective_tracker_provider() {
+    if [[ -n "${YAML_TRACKER_PROVIDER:-}" ]]; then
+        printf '%s' "$YAML_TRACKER_PROVIDER"
+    else
+        printf 'github'
+    fi
+}
+
+yaml_get_tracker_linear_team() {
+    printf '%s' "${YAML_TRACKER_LINEAR_TEAM:-}"
+}
+
+yaml_get_tracker_linear_project() {
+    printf '%s' "${YAML_TRACKER_LINEAR_PROJECT:-}"
+}
+
 # Find repo index by name (path basename)
 # Usage: idx=$(yaml_find_by_name "backend")
 # Returns: index or -1 if not found
@@ -446,6 +595,28 @@ yaml_write() {
         local escaped_workspace
         escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
         printf '  name: "%s"\n\n' "$escaped_workspace"
+
+        if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
+            printf 'agents:\n'
+            printf '  files: [%s]\n\n' "$YAML_AGENT_FILES"
+        fi
+
+        if [[ -n "${YAML_TRACKER_PROVIDER:-}" ]]; then
+            printf 'tracker:\n'
+            printf '  provider: %s\n' "$YAML_TRACKER_PROVIDER"
+            if [[ "$YAML_TRACKER_PROVIDER" == "linear" ]] \
+                || [[ -n "${YAML_TRACKER_LINEAR_TEAM:-}" ]] \
+                || [[ -n "${YAML_TRACKER_LINEAR_PROJECT:-}" ]]; then
+                printf '  linear:\n'
+                local linear_team linear_project
+                linear_team=$(_yaml_escape_double_quoted "${YAML_TRACKER_LINEAR_TEAM:-}")
+                linear_project=$(_yaml_escape_double_quoted "${YAML_TRACKER_LINEAR_PROJECT:-}")
+                printf '    team: "%s"\n' "$linear_team"
+                printf '    project: "%s"\n' "$linear_project"
+            fi
+            printf '\n'
+        fi
+
         printf 'repos:\n'
 
         for ((i = 0; i < YAML_REPO_COUNT; i++)); do

@@ -53,6 +53,32 @@ revo issue create (--repo NAME | --tag TAG) "TITLE" [options]
 EOF
 }
 
+_issue_require_github_provider() {
+    local provider
+    provider=$(yaml_get_effective_tracker_provider)
+
+    case "$provider" in
+        github)
+            return 0
+            ;;
+        linear)
+            ui_step_error "This workspace uses Linear for tracker work."
+            ui_info "Use the Linear MCP/app for projects, milestones, issues, comments, status updates, and closeout."
+            ui_info "If Linear tools are unavailable, ask the user to connect Linear before changing tracker state."
+            return 1
+            ;;
+        none)
+            ui_step_error "This workspace has no configured issue tracker."
+            ui_info "Do not create or list tracker issues unless the user explicitly provides a tracker to use."
+            return 1
+            ;;
+        *)
+            ui_step_error "Unsupported tracker provider: $provider"
+            return 1
+            ;;
+    esac
+}
+
 # --- list ----------------------------------------------------------------
 
 _issue_list() {
@@ -74,12 +100,13 @@ _issue_list() {
         esac
     done
 
+    config_require_workspace || return 1
+    _issue_require_github_provider || return 1
+
     if ! command -v gh >/dev/null 2>&1; then
         ui_step_error "gh CLI not found. Install from https://cli.github.com/"
         return 1
     fi
-
-    config_require_workspace || return 1
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -262,12 +289,13 @@ _issue_create() {
         return 1
     fi
 
+    config_require_workspace || return 1
+    _issue_require_github_provider || return 1
+
     if ! command -v gh >/dev/null 2>&1; then
         ui_step_error "gh CLI not found. Install from https://cli.github.com/"
         return 1
     fi
-
-    config_require_workspace || return 1
 
     # Resolve target repo paths
     local target_paths=()

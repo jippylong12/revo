@@ -700,6 +700,153 @@ test_workspace_name_with_quotes_roundtrip() {
     test_pass
 }
 
+test_agents_tracker_parse() {
+    test_start "yaml_parse - agents and tracker config"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: agent-tracker
+agents:
+  files: [AGENTS.md, CLAUDE.md]
+tracker:
+  provider: linear
+  linear:
+    team: "Engineering"
+    project: "Customer Portal"
+repos:
+  - url: git@github.com:org/api.git
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "AGENTS.md,CLAUDE.md" "$(yaml_get_agent_files)" || { rm "$test_file"; return 1; }
+    assert_eq "linear" "$(yaml_get_tracker_provider)" || { rm "$test_file"; return 1; }
+    assert_eq "Engineering" "$(yaml_get_tracker_linear_team)" || { rm "$test_file"; return 1; }
+    assert_eq "Customer Portal" "$(yaml_get_tracker_linear_project)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_tracker_provider_after_linear_block() {
+    test_start "yaml_parse - tracker provider after linear block"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: tracker-order
+tracker:
+  linear:
+    team: "Engineering"
+    project: "Customer Portal"
+  provider: linear
+repos:
+  - url: git@github.com:org/api.git
+defaults:
+  branch: main
+EOF
+
+    yaml_parse "$test_file"
+
+    assert_eq "linear" "$(yaml_get_tracker_provider)" || { rm "$test_file"; return 1; }
+    assert_eq "linear" "$(yaml_get_effective_tracker_provider)" || { rm "$test_file"; return 1; }
+    assert_eq "Engineering" "$(yaml_get_tracker_linear_team)" || { rm "$test_file"; return 1; }
+    assert_eq "Customer Portal" "$(yaml_get_tracker_linear_project)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_agents_tracker_roundtrip() {
+    test_start "yaml_write - agents and tracker roundtrip"
+
+    YAML_WORKSPACE_NAME="agent-rt"
+    YAML_DEFAULTS_BRANCH="main"
+    YAML_AGENT_FILES="AGENTS.md,CLAUDE.md"
+    YAML_TRACKER_PROVIDER="linear"
+    YAML_TRACKER_LINEAR_TEAM="Team One"
+    YAML_TRACKER_LINEAR_PROJECT="Project One"
+    YAML_REPO_COUNT=1
+    YAML_REPO_URLS=("git@github.com:o/a.git")
+    YAML_REPO_PATHS=("a")
+    YAML_REPO_TAGS=("")
+    YAML_REPO_DEPS=("")
+    YAML_REPO_BRANCHES=("")
+    YAML_REPO_DB_TYPES=("")
+    YAML_REPO_DB_NAMES=("")
+    YAML_REPO_TYPES=("")
+    YAML_REPO_DESCRIPTIONS=("")
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    yaml_write "$test_file"
+    yaml_parse "$test_file"
+
+    assert_eq "AGENTS.md,CLAUDE.md" "$(yaml_get_agent_files)" || { rm "$test_file"; return 1; }
+    assert_eq "linear" "$(yaml_get_tracker_provider)" || { rm "$test_file"; return 1; }
+    assert_eq "Team One" "$(yaml_get_tracker_linear_team)" || { rm "$test_file"; return 1; }
+    assert_eq "Project One" "$(yaml_get_tracker_linear_project)" || { rm "$test_file"; return 1; }
+
+    rm "$test_file"
+    test_pass
+}
+
+test_agents_rejects_unsupported_file() {
+    test_start "yaml_parse - rejects unsupported agent file"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: bad-agent
+agents:
+  files: [README.md]
+repos:
+  - url: git@github.com:org/api.git
+defaults:
+  branch: main
+EOF
+
+    if yaml_parse "$test_file" 2>/dev/null; then
+        rm "$test_file"
+        test_fail "unsupported agent file parsed successfully"
+        return 1
+    fi
+
+    rm "$test_file"
+    test_pass
+}
+
+test_tracker_rejects_unsupported_provider() {
+    test_start "yaml_parse - rejects unsupported tracker provider"
+
+    local test_file="/tmp/revo/revo_test_$$.yaml"
+    cat > "$test_file" << 'EOF'
+version: 1
+workspace:
+  name: bad-tracker
+tracker:
+  provider: jira
+repos:
+  - url: git@github.com:org/api.git
+defaults:
+  branch: main
+EOF
+
+    if yaml_parse "$test_file" 2>/dev/null; then
+        rm "$test_file"
+        test_fail "unsupported tracker provider parsed successfully"
+        return 1
+    fi
+
+    rm "$test_file"
+    test_pass
+}
+
 # --- Run tests ---
 
 printf "\n=== YAML Parser Tests ===\n\n"
@@ -728,6 +875,11 @@ test_type_quoted_roundtrip
 test_description_yaml_injection
 test_description_with_colon
 test_workspace_name_with_quotes_roundtrip
+test_agents_tracker_parse
+test_tracker_provider_after_linear_block
+test_agents_tracker_roundtrip
+test_agents_rejects_unsupported_file
+test_tracker_rejects_unsupported_provider
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

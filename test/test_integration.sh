@@ -149,7 +149,7 @@ test_help() {
 
     local output
     output=$($REVO_CMD --help 2>&1) || true
-    if echo "$output" | grep -q "Claude-first multi-repo workspace manager"; then
+    if echo "$output" | grep -q "Agent-first multi-repo workspace manager"; then
         test_pass
     else
         test_fail "help output missing expected text"
@@ -176,7 +176,11 @@ test_init_creates_files() {
     # Run init with stdin to answer prompts
     echo "test-workspace" | $REVO_CMD init > /dev/null 2>&1
 
-    if [[ -f "revo.yaml" ]] && [[ -f ".gitignore" ]] && [[ -d "repos" ]]; then
+    if [[ -f "revo.yaml" ]] && [[ -f ".gitignore" ]] && [[ -d "repos" ]] \
+        && [[ -f "AGENTS.md" ]] && [[ -f "CLAUDE.md" ]] \
+        && grep -q "files: \[AGENTS.md,CLAUDE.md\]" revo.yaml \
+        && grep -q "provider: github" revo.yaml \
+        && ! grep -q "revo exec" AGENTS.md CLAUDE.md; then
         test_pass
     else
         test_fail "missing expected files/directories"
@@ -537,6 +541,50 @@ test_context_generates_claude_md() {
     fi
 }
 
+test_context_generates_configured_agent_files() {
+    test_start "revo context - writes configured AGENTS.md and CLAUDE.md"
+
+    setup_test_dir
+    echo "agent-files" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+
+    $REVO_CMD context --auto > /dev/null 2>&1
+
+    if [[ -f "AGENTS.md" ]] && [[ -f "CLAUDE.md" ]] \
+        && grep -q "Tracker Source Of Truth" AGENTS.md \
+        && grep -q "Tracker Source Of Truth" CLAUDE.md \
+        && grep -q "GitHub issues" AGENTS.md; then
+        test_pass
+    else
+        test_fail "configured agent files missing expected tracker context"
+    fi
+}
+
+test_context_legacy_config_defaults_to_claude_only() {
+    test_start "revo context - legacy config writes CLAUDE.md only"
+
+    setup_test_dir
+    mkdir -p repos
+    cat > revo.yaml << 'EOF'
+version: 1
+workspace:
+  name: legacy-agent
+repos:
+  - url: git@github.com:test/shared.git
+defaults:
+  branch: main
+EOF
+
+    $REVO_CMD context --auto > /dev/null 2>&1
+
+    if [[ -f "CLAUDE.md" ]] && [[ ! -f "AGENTS.md" ]] \
+        && grep -q "GitHub issues" CLAUDE.md; then
+        test_pass
+    else
+        test_fail "legacy config did not preserve CLAUDE-only default"
+    fi
+}
+
 test_init_preserves_existing_claude_md() {
     test_start "revo init - preserves pre-existing CLAUDE.md"
 
@@ -637,6 +685,37 @@ test_context_preserves_user_content() {
         return 1
     fi
     test_pass
+}
+
+test_context_preserves_agents_user_content() {
+    test_start "revo context - preserves AGENTS.md user content"
+
+    setup_test_dir
+    echo "agents-preserve" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/shared.git" > /dev/null 2>&1
+
+    $REVO_CMD context --auto > /dev/null 2>&1
+
+    local tmp
+    tmp=$(mktemp)
+    {
+        printf '# Agent pre-content\n\n'
+        cat AGENTS.md
+        printf '\n## Agent post-content\n\nAgent notes.\n'
+    } > "$tmp"
+    mv "$tmp" AGENTS.md
+
+    $REVO_CMD context --auto > /dev/null 2>&1
+
+    if grep -q "# Agent pre-content" AGENTS.md \
+        && grep -q "## Agent post-content" AGENTS.md \
+        && grep -q "Agent notes" AGENTS.md \
+        && grep -q "BEGIN revo:auto" AGENTS.md \
+        && grep -q "END revo:auto" AGENTS.md; then
+        test_pass
+    else
+        test_fail "lost AGENTS.md user content or markers"
+    fi
 }
 
 test_context_idempotent_no_duplication() {
@@ -747,6 +826,75 @@ test_issue_list_human_calls_gh_once_per_repo() {
         test_pass
     else
         test_fail "expected 2 gh calls and both issues, got calls=$calls output=$output"
+    fi
+}
+
+test_issue_linear_provider_blocks_gh() {
+    test_start "revo issue - linear provider blocks gh issue calls"
+
+    setup_test_dir
+    echo "issue-linear" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/api.git" --path api > /dev/null 2>&1
+    mkdir -p repos/api
+
+    local tmp
+    tmp=$(mktemp)
+    awk '
+        /provider: github/ { print "  provider: linear"; next }
+        { print }
+    ' revo.yaml > "$tmp"
+    mv "$tmp" revo.yaml
+
+    local fakebin="$TEST_DIR/fakebin"
+    local log="$TEST_DIR/gh.log"
+    setup_fake_gh_issue_list "$fakebin" "$log"
+
+    local output
+    if output=$(FAKE_GH_LOG="$log" PATH="$fakebin:$PATH" $REVO_CMD issue list 2>&1); then
+        test_fail "linear provider allowed issue list"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "Linear MCP/app" && [[ ! -s "$log" ]]; then
+        test_pass
+    else
+        test_fail "expected Linear MCP guidance and no gh calls, output=$output"
+    fi
+}
+
+test_issue_none_provider_blocks_gh() {
+    test_start "revo issue - none provider blocks gh issue calls"
+
+    setup_test_dir
+    echo "issue-none" | $REVO_CMD init > /dev/null 2>&1
+    $REVO_CMD add "git@github.com:test/api.git" --path api > /dev/null 2>&1
+    mkdir -p repos/api
+
+    local tmp
+    tmp=$(mktemp)
+    awk '
+        /provider: github/ { print "  provider: none"; next }
+        /  linear:/ { skip = 1; next }
+        skip && /    team:/ { next }
+        skip && /    project:/ { skip = 0; next }
+        { print }
+    ' revo.yaml > "$tmp"
+    mv "$tmp" revo.yaml
+
+    local fakebin="$TEST_DIR/fakebin"
+    local log="$TEST_DIR/gh.log"
+    setup_fake_gh_issue_list "$fakebin" "$log"
+
+    local output
+    if output=$(FAKE_GH_LOG="$log" PATH="$fakebin:$PATH" $REVO_CMD issue list 2>&1); then
+        test_fail "none provider allowed issue list"
+        return 1
+    fi
+
+    if echo "$output" | grep -q "no configured issue tracker" && [[ ! -s "$log" ]]; then
+        test_pass
+    else
+        test_fail "expected no-tracker guidance and no gh calls, output=$output"
     fi
 }
 
@@ -861,13 +1009,18 @@ test_workspace_cleans_partial_repo_after_branch_failure
 test_tag_filtering
 test_mars_yaml_fallback
 test_context_generates_claude_md
+test_context_generates_configured_agent_files
+test_context_legacy_config_defaults_to_claude_only
 test_init_preserves_existing_claude_md
 test_init_preserves_existing_gitignore
 test_context_preserves_user_content
+test_context_preserves_agents_user_content
 test_context_idempotent_no_duplication
 test_context_does_not_emit_env_secret_values
 test_issue_list_json_flat_array
 test_issue_list_human_calls_gh_once_per_repo
+test_issue_linear_provider_blocks_gh
+test_issue_none_provider_blocks_gh
 test_feature_creates_file
 
 # Network tests (optional - skip if offline)

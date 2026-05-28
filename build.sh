@@ -18,7 +18,7 @@ fi
 # Start with header
 cat > "$OUTPUT_FILE" << 'HEADER'
 #!/usr/bin/env bash
-# Revo CLI - Claude-first multi-repo workspace manager
+# Revo CLI - Agent-first multi-repo workspace manager
 # https://github.com/jippylong12/revo
 # This is a bundled distribution - do not edit
 
@@ -27,7 +27,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="1.0.0"
+REVO_VERSION="2.0.0"
 
 HEADER
 

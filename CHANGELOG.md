@@ -1,5 +1,31 @@
 # Changelog
 
+## [2.0.0] - 2026-05-28
+
+### Added
+- Agent-aware workspace configuration. New workspaces now write
+  `agents.files: [AGENTS.md, CLAUDE.md]` so Revo can generate instructions
+  for Codex-style and Claude-style coding agents from the same context.
+- Tracker provider configuration via `tracker.provider` with `github`,
+  `linear`, and `none` modes. GitHub remains the default for new workspaces
+  and legacy configs without tracker settings continue to behave as GitHub
+  issue workspaces.
+- Linear tracker guidance in generated agent files. Linear mode directs
+  agents to use the Linear MCP/app for projects, milestones, issues,
+  comments, status updates, and closeout instead of trying to call Linear
+  from Bash.
+
+### Changed
+- `revo context` now regenerates the configured agent instruction files
+  instead of assuming `CLAUDE.md` is the only consumer.
+- Generated command docs now describe tracker workflows rather than
+  GitHub-only issue workflows.
+
+### Fixed
+- `revo issue` now respects tracker configuration. It keeps existing
+  `gh issue` behavior for GitHub workspaces, but does not call `gh` in
+  Linear or no-tracker workspaces.
+
 ## [1.0.0] - 2026-05-28
 
 ### Changed

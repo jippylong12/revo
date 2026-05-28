@@ -74,6 +74,13 @@ test_config_init() {
     assert_file_exists "$test_dir/revo.yaml" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
     assert_file_exists "$test_dir/.gitignore" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
     assert_dir_exists "$test_dir/repos" || { cd "$orig_dir"; rm -rf "$test_dir"; return 1; }
+    if ! grep -q "files: \[AGENTS.md,CLAUDE.md\]" "$test_dir/revo.yaml" \
+        || ! grep -q "provider: github" "$test_dir/revo.yaml"; then
+        test_fail "revo.yaml missing default agents/tracker config"
+        cd "$orig_dir"
+        rm -rf "$test_dir"
+        return 1
+    fi
 
     # Check .gitignore content
     if ! grep -q "repos/" "$test_dir/.gitignore"; then

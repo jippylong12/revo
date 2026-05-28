@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Revo CLI - Claude-first multi-repo workspace manager
+# Revo CLI - Agent-first multi-repo workspace manager
 # https://github.com/jippylong12/revo
 # This is a bundled distribution - do not edit
 
@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="1.0.0"
+REVO_VERSION="2.0.0"
 
 
 # === lib/ui.sh ===
@@ -477,6 +477,10 @@ trap 'ui_cursor_show' EXIT
 # Global state - using parallel indexed arrays instead of associative arrays
 YAML_WORKSPACE_NAME=""
 YAML_DEFAULTS_BRANCH=""
+YAML_AGENT_FILES=""
+YAML_TRACKER_PROVIDER=""
+YAML_TRACKER_LINEAR_TEAM=""
+YAML_TRACKER_LINEAR_PROJECT=""
 YAML_REPO_COUNT=0
 
 # Arrays indexed by repo number (0, 1, 2, ...)
@@ -578,6 +582,9 @@ _yaml_parse_inline_list() {
 yaml_parse() {
     local file="$1"
     local line
+    local in_agents=0
+    local in_tracker=0
+    local in_tracker_linear=0
     local in_repos=0
     local in_defaults=0
     local in_database=0
@@ -586,6 +593,10 @@ yaml_parse() {
     # Reset state
     YAML_WORKSPACE_NAME=""
     YAML_DEFAULTS_BRANCH="main"
+    YAML_AGENT_FILES=""
+    YAML_TRACKER_PROVIDER=""
+    YAML_TRACKER_LINEAR_TEAM=""
+    YAML_TRACKER_LINEAR_PROJECT=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
@@ -611,15 +622,38 @@ yaml_parse() {
         trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
 
         # Check section markers
-        if [[ "$trimmed" == "repos:" ]]; then
+        if [[ "$trimmed" == "agents:" ]]; then
+            in_agents=1
+            in_tracker=0
+            in_tracker_linear=0
+            in_repos=0
+            in_defaults=0
+            continue
+        elif [[ "$trimmed" == "tracker:" ]]; then
+            in_agents=0
+            in_tracker=1
+            in_tracker_linear=0
+            in_repos=0
+            in_defaults=0
+            continue
+        elif [[ "$trimmed" == "repos:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=1
             in_defaults=0
             continue
         elif [[ "$trimmed" == "defaults:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=0
             in_defaults=1
             continue
         elif [[ "$trimmed" == "workspace:" ]]; then
+            in_agents=0
+            in_tracker=0
+            in_tracker_linear=0
             in_repos=0
             in_defaults=0
             continue
@@ -634,6 +668,66 @@ yaml_parse() {
             fi
             YAML_WORKSPACE_NAME="$workspace_name"
             continue
+        fi
+
+        # Parse agents section
+        if [[ $in_agents -eq 1 ]]; then
+            if [[ "$trimmed" =~ ^files:[[:space:]]*(.*)$ ]]; then
+                local agent_files
+                if ! agent_files=$(_yaml_parse_inline_list "${trimmed#files:}"); then
+                    printf 'Error: invalid agents files list\n' >&2
+                    return 1
+                fi
+                if ! yaml_validate_agent_files "$agent_files"; then
+                    printf 'Error: unsupported agents files list: %s\n' "$agent_files" >&2
+                    return 1
+                fi
+                YAML_AGENT_FILES="$agent_files"
+            fi
+            continue
+        fi
+
+        # Parse tracker section
+        if [[ $in_tracker -eq 1 ]]; then
+            if [[ "$trimmed" =~ ^provider:[[:space:]]*(.+)$ ]]; then
+                local tracker_provider
+                if ! tracker_provider=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker provider\n' >&2
+                    return 1
+                fi
+                case "$tracker_provider" in
+                    github|linear|none)
+                        YAML_TRACKER_PROVIDER="$tracker_provider"
+                        ;;
+                    *)
+                        printf 'Error: unsupported tracker provider: %s\n' "$tracker_provider" >&2
+                        return 1
+                        ;;
+                esac
+                in_tracker_linear=0
+                continue
+            fi
+
+            if [[ "$trimmed" == "linear:" ]]; then
+                in_tracker_linear=1
+                continue
+            elif [[ $in_tracker_linear -eq 1 ]] && [[ "$trimmed" =~ ^team:[[:space:]]*(.*)$ ]]; then
+                local linear_team
+                if ! linear_team=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker linear team\n' >&2
+                    return 1
+                fi
+                YAML_TRACKER_LINEAR_TEAM="$linear_team"
+                continue
+            elif [[ $in_tracker_linear -eq 1 ]] && [[ "$trimmed" =~ ^project:[[:space:]]*(.*)$ ]]; then
+                local linear_project
+                if ! linear_project=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
+                    printf 'Error: invalid tracker linear project\n' >&2
+                    return 1
+                fi
+                YAML_TRACKER_LINEAR_PROJECT="$linear_project"
+                continue
+            fi
         fi
 
         # Parse defaults section
@@ -792,6 +886,29 @@ yaml_validate_repo_path() {
     return 0
 }
 
+yaml_validate_agent_files() {
+    local files="$1"
+
+    [[ -z "$files" ]] && return 1
+
+    local old_ifs="$IFS"
+    local file
+    IFS=','
+    for file in $files; do
+        case "$file" in
+            AGENTS.md|CLAUDE.md)
+                ;;
+            *)
+                IFS="$old_ifs"
+                return 1
+                ;;
+        esac
+    done
+    IFS="$old_ifs"
+
+    return 0
+}
+
 # Extract repo name from URL
 # Usage: yaml_path_from_url "git@github.com:org/repo.git"
 # Returns: "repo"
@@ -889,6 +1006,38 @@ yaml_get_db_name() {
     printf '%s' "${YAML_REPO_DB_NAMES[$idx]:-}"
 }
 
+yaml_get_agent_files() {
+    printf '%s' "${YAML_AGENT_FILES:-}"
+}
+
+yaml_get_effective_agent_files() {
+    if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
+        printf '%s' "$YAML_AGENT_FILES"
+    else
+        printf 'CLAUDE.md'
+    fi
+}
+
+yaml_get_tracker_provider() {
+    printf '%s' "${YAML_TRACKER_PROVIDER:-}"
+}
+
+yaml_get_effective_tracker_provider() {
+    if [[ -n "${YAML_TRACKER_PROVIDER:-}" ]]; then
+        printf '%s' "$YAML_TRACKER_PROVIDER"
+    else
+        printf 'github'
+    fi
+}
+
+yaml_get_tracker_linear_team() {
+    printf '%s' "${YAML_TRACKER_LINEAR_TEAM:-}"
+}
+
+yaml_get_tracker_linear_project() {
+    printf '%s' "${YAML_TRACKER_LINEAR_PROJECT:-}"
+}
+
 # Find repo index by name (path basename)
 # Usage: idx=$(yaml_find_by_name "backend")
 # Returns: index or -1 if not found
@@ -917,6 +1066,28 @@ yaml_write() {
         local escaped_workspace
         escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
         printf '  name: "%s"\n\n' "$escaped_workspace"
+
+        if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
+            printf 'agents:\n'
+            printf '  files: [%s]\n\n' "$YAML_AGENT_FILES"
+        fi
+
+        if [[ -n "${YAML_TRACKER_PROVIDER:-}" ]]; then
+            printf 'tracker:\n'
+            printf '  provider: %s\n' "$YAML_TRACKER_PROVIDER"
+            if [[ "$YAML_TRACKER_PROVIDER" == "linear" ]] \
+                || [[ -n "${YAML_TRACKER_LINEAR_TEAM:-}" ]] \
+                || [[ -n "${YAML_TRACKER_LINEAR_PROJECT:-}" ]]; then
+                printf '  linear:\n'
+                local linear_team linear_project
+                linear_team=$(_yaml_escape_double_quoted "${YAML_TRACKER_LINEAR_TEAM:-}")
+                linear_project=$(_yaml_escape_double_quoted "${YAML_TRACKER_LINEAR_PROJECT:-}")
+                printf '    team: "%s"\n' "$linear_team"
+                printf '    project: "%s"\n' "$linear_project"
+            fi
+            printf '\n'
+        fi
+
         printf 'repos:\n'
 
         for ((i = 0; i < YAML_REPO_COUNT; i++)); do
@@ -1154,6 +1325,10 @@ config_init() {
     # Set workspace name for yaml module
     YAML_WORKSPACE_NAME="$workspace_name"
     YAML_DEFAULTS_BRANCH="main"
+    YAML_AGENT_FILES="AGENTS.md,CLAUDE.md"
+    YAML_TRACKER_PROVIDER="github"
+    YAML_TRACKER_LINEAR_TEAM=""
+    YAML_TRACKER_LINEAR_PROJECT=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
@@ -2683,11 +2858,12 @@ _init_scan_existing() {
     fi
 }
 
-# Write a Claude-first onboarding CLAUDE.md if and only if the workspace
-# root has no CLAUDE.md yet. Existing files are left alone — `revo context`
+# Write an onboarding agent instruction file if and only if the workspace root
+# has no file at that path yet. Existing files are left alone — `revo context`
 # will append its marker-wrapped auto block once repos are added.
-_init_write_claude_md() {
-    local out="$REVO_WORKSPACE_ROOT/CLAUDE.md"
+_init_write_agent_md() {
+    local agent_file="$1"
+    local out="$REVO_WORKSPACE_ROOT/$agent_file"
 
     if [[ -f "$out" ]]; then
         return 0
@@ -2707,7 +2883,7 @@ The user may give you repo URLs or descriptions. Use these commands to set up:
 ```bash
 revo add <git-url> --tags <tag1,tag2> [--depends-on <repo-name>]
 revo clone
-revo context    # regenerates this file with full repo details
+revo context    # regenerates configured agent files with full repo details
 ```
 
 Example:
@@ -2728,7 +2904,6 @@ Use `revo status` to see all repos, branches, and dirty state.
 - `revo commit "msg"` — commit all dirty repos with same message
 - `revo push` — push all repos
 - `revo pr "title"` — create coordinated PRs via gh CLI
-- `revo exec "cmd" --tag <tag>` — run command in filtered repos
 - `revo context` — regenerate this file after repos change
 - `revo add <url> --tags <t> --depends-on <d>` — add a repo
 
@@ -2736,7 +2911,7 @@ Use `revo status` to see all repos, branches, and dirty state.
 All commands support `--tag <tag>` to target specific repos:
 
 ```bash
-revo exec "npm test" --tag frontend
+revo status --tag frontend
 revo sync --tag backend
 revo branch hotfix --tag api
 ```
@@ -2753,7 +2928,21 @@ revo branch hotfix --tag api
 Run `revo context` after cloning to populate repo details and dependency order.
 EOF
 
-    ui_step_done "Created CLAUDE.md (Claude reads this automatically)"
+    ui_step_done "Created:" "$agent_file"
+}
+
+_init_write_agent_files() {
+    local files
+    files=$(yaml_get_effective_agent_files)
+
+    local old_ifs="$IFS"
+    local agent_file
+    IFS=','
+    for agent_file in $files; do
+        [[ -z "$agent_file" ]] && continue
+        _init_write_agent_md "$agent_file"
+    done
+    IFS="$old_ifs"
 }
 
 cmd_init() {
@@ -2804,12 +2993,12 @@ cmd_init() {
         ui_info "For repos to analyze, read entry points and source code to"
         ui_info "understand what each repo does and how they relate to each other."
         ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
-        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
-        ui_outro "Descriptions ready? Run 'revo context --auto' to generate CLAUDE.md."
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate configured agent files."
+        ui_outro "Descriptions ready? Run 'revo context --auto' to generate agent files."
         return 0
     fi
 
-    ui_intro "Revo - Claude-first Multi-Repo Workspace"
+    ui_intro "Revo - Agent-first Multi-Repo Workspace"
 
     # Default workspace name to current directory basename so init can run
     # non-interactively. The user can still override by typing a value.
@@ -2889,11 +3078,11 @@ cmd_init() {
         fi
     fi
 
-    # If we detected repos, write basic CLAUDE.md and prompt Claude to
+    # If we detected repos, write basic agent files and prompt the agent to
     # analyze each repo for descriptions.
     if [[ $detected_count -gt 0 ]]; then
         ui_bar_line
-        _init_write_claude_md
+        _init_write_agent_files
         ui_bar_line
         ui_info "$(ui_bold "$detected_count repo(s) detected but descriptions are not set.")"
         ui_info ""
@@ -2904,12 +3093,12 @@ cmd_init() {
         ui_info "For repos to analyze, read entry points and source code to"
         ui_info "understand what each repo does and how they relate to each other."
         ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
-        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate configured agent files."
         ui_outro "Run 'revo init' again after setting descriptions."
         return 0
     fi
 
-    _init_write_claude_md
+    _init_write_agent_files
 
     ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
     return 0
@@ -2928,7 +3117,7 @@ cmd_detect() {
                 printf 'Usage: revo detect\n\n'
                 printf 'Auto-detect git repositories in the current directory and\n'
                 printf 'bootstrap a revo workspace around them. Generates revo.yaml\n'
-                printf 'and CLAUDE.md from what it finds.\n'
+                printf 'and configured agent files from what it finds.\n'
                 return 0
                 ;;
             *)
@@ -2939,7 +3128,7 @@ cmd_detect() {
     done
 
     if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        ui_step_error "Workspace already initialized — run 'revo context' to regenerate CLAUDE.md"
+        ui_step_error "Workspace already initialized — run 'revo context' to regenerate agent files"
         return 1
     fi
 
@@ -3152,7 +3341,7 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
-    # Persist any newly detected per-repo branches and regenerate CLAUDE.md
+    # Persist any newly detected per-repo branches and regenerate agent files
     # so newly cloned repos appear in the context immediately.
     if [[ $fail_count -eq 0 ]] && { [[ $success_count -gt 0 ]] || [[ $skip_count -gt 0 ]]; }; then
         if [[ $success_count -gt 0 ]]; then
@@ -3819,7 +4008,7 @@ cmd_list() {
 
 # === lib/commands/context.sh ===
 # Revo CLI - context command
-# Scans all cloned repos and writes a workspace-level CLAUDE.md.
+# Scans all cloned repos and writes configured workspace-level agent files.
 
 # Topological sort over YAML_REPO_DEPS.
 # Sets CONTEXT_ORDER to newline-separated repo indices (roots first).
@@ -3908,17 +4097,18 @@ _context_topo_sort() {
 }
 
 # Markers used to delimit revo's auto-generated block inside the workspace
-# CLAUDE.md. Anything between these markers is owned by `revo context` and
+# agent file. Anything between these markers is owned by `revo context` and
 # replaced on every regeneration. Anything outside is preserved untouched.
 CONTEXT_BEGIN_MARKER='<!-- BEGIN revo:auto - regenerated by `revo context`, do not edit between markers -->'
 CONTEXT_END_MARKER='<!-- END revo:auto -->'
+CONTEXT_WRITTEN_FILES=""
 
-# Splice an auto-generated block into the target CLAUDE.md without
+# Splice an auto-generated block into the target agent file without
 # clobbering user content.
 #  - If target doesn't exist: copy auto file to target.
 #  - If target has BEGIN+END markers: replace the marker block in place.
 #  - Otherwise: append the auto block (with a separator) at the end.
-# Usage: _context_merge_into "/tmp/auto" "/path/to/CLAUDE.md"
+# Usage: _context_merge_into "/tmp/auto" "/path/to/AGENTS.md"
 _context_merge_into() {
     local auto_file="$1"
     local target="$2"
@@ -3961,10 +4151,11 @@ _context_merge_into() {
     return 0
 }
 
-# Write the workspace CLAUDE.md to the given path. The auto-generated content
-# is wrapped in BEGIN/END markers and spliced into any existing CLAUDE.md so
-# user content above and below the markers is preserved across regenerations.
-# Usage: _context_write_file "/path/to/CLAUDE.md"
+# Write one workspace agent instruction file to the given path. The
+# auto-generated content is wrapped in BEGIN/END markers and spliced into any
+# existing file so user content above and below the markers is preserved across
+# regenerations.
+# Usage: _context_write_file "/path/to/AGENTS.md"
 _context_write_file() {
     local target="$1"
     local workspace
@@ -4221,7 +4412,41 @@ _context_write_file() {
         done
     fi
 
-    # Agent instructions — directive workflows for Claude Code
+    local tracker_provider tracker_team tracker_project
+    tracker_provider=$(yaml_get_effective_tracker_provider)
+    tracker_team=$(yaml_get_tracker_linear_team)
+    tracker_project=$(yaml_get_tracker_linear_project)
+
+    {
+        printf '\n'
+        printf '## Tracker Source Of Truth\n'
+        printf '\n'
+        case "$tracker_provider" in
+            linear)
+                printf 'This workspace uses **Linear** for tracker work.\n'
+                if [[ -n "$tracker_team" ]]; then
+                    printf -- '- **Linear team:** %s\n' "$tracker_team"
+                fi
+                if [[ -n "$tracker_project" ]]; then
+                    printf -- '- **Linear project:** %s\n' "$tracker_project"
+                fi
+                printf '\n'
+                printf 'Use the Linear MCP/app for projects, milestones, issues, comments, status updates, and closeout.\n'
+                printf 'Do not use GitHub issues unless the user explicitly asks. If Linear MCP/app tools are unavailable, stop and ask the user to connect Linear.\n'
+                ;;
+            none)
+                printf 'This workspace has no configured issue tracker.\n'
+                printf 'Do not create tracker issues unless the user explicitly asks and provides the tracker to use.\n'
+                ;;
+            github|*)
+                printf 'This workspace uses **GitHub issues** for tracker work.\n'
+                printf 'Use `revo issue list` and `revo issue create` for cross-repo issue workflows backed by the GitHub CLI.\n'
+                ;;
+        esac
+        printf '\n'
+    } >> "$output"
+
+    # Agent instructions — directive workflows for coding agents
     {
         printf '\n'
         printf '## Agent Instructions\n'
@@ -4235,7 +4460,7 @@ _context_write_file() {
         printf -- '- NEVER ask "what is the scope?" for a feature that has a feature file. The file IS the scope.\n'
         printf -- '- When uncertain about revo commands, run `revo --help` or read `.revo/COMMANDS.md`.\n'
         printf -- '- Use `revo` commands for all cross-repo git operations. Do not manually cd into each repo and run git.\n'
-        printf -- '- Each repo may have its own CLAUDE.md with repo-specific instructions — read it when working in that repo.\n'
+        printf -- '- Each repo may have its own agent instructions such as AGENTS.md or CLAUDE.md — read them when working in that repo.\n'
         printf -- '- Follow the dependency order above when making cross-repo changes.\n'
         printf '\n'
         printf '### Workflows\n'
@@ -4271,7 +4496,11 @@ _context_write_file() {
         printf '### Quick Reference\n'
         printf '\n'
         printf 'Run `revo --help` for all commands. Key ones: `status`, `commit`, `push`,\n'
-        printf '`pr`, `feature`, `workspace`, `sync`, `checkout default`, `issue list`.\n'
+        printf '`pr`, `feature`, `workspace`, `sync`, `checkout default`'
+        if [[ "$tracker_provider" == "github" ]]; then
+            printf ', `issue list`'
+        fi
+        printf '.\n'
         printf 'All commands accept `--tag TAG` to filter by repo tag.\n'
         printf 'See `.revo/COMMANDS.md` for the full command reference with examples.\n'
         printf '\n'
@@ -4283,9 +4512,30 @@ _context_write_file() {
     rm -f "$output"
 }
 
+_context_write_configured_files() {
+    CONTEXT_WRITTEN_FILES=""
+
+    local files
+    files=$(yaml_get_effective_agent_files)
+
+    local old_ifs="$IFS"
+    local agent_file
+    IFS=','
+    for agent_file in $files; do
+        [[ -z "$agent_file" ]] && continue
+        _context_write_file "$REVO_WORKSPACE_ROOT/$agent_file"
+        if [[ -z "$CONTEXT_WRITTEN_FILES" ]]; then
+            CONTEXT_WRITTEN_FILES="$agent_file"
+        else
+            CONTEXT_WRITTEN_FILES="$CONTEXT_WRITTEN_FILES, $agent_file"
+        fi
+    done
+    IFS="$old_ifs"
+}
+
 # Write the .revo/COMMANDS.md reference file. Detailed command docs that
-# Claude Code can read on-demand, kept out of the main CLAUDE.md so the
-# agent sees directive workflows first, not a wall of syntax.
+# Agents can read on-demand, kept out of the main instruction files so the
+# directive workflows stay concise.
 _context_write_commands_file() {
     local target="$REVO_WORKSPACE_ROOT/.revo/COMMANDS.md"
     mkdir -p "$REVO_WORKSPACE_ROOT/.revo"
@@ -4299,7 +4549,7 @@ _context_write_commands_file() {
         printf '\n'
         printf -- '- `revo add <git-url> --tags <tags> [--depends-on <repo>]` — add a repo\n'
         printf -- '- `revo clone` — clone all configured repos\n'
-        printf -- '- `revo context` — regenerate workspace CLAUDE.md (interactive)\n'
+        printf -- '- `revo context` — regenerate configured workspace agent files (interactive)\n'
         printf -- '- `revo context --auto` — regenerate without prompts (uses stored/auto-detected values)\n'
         printf -- '- `revo context --analyze` — output detailed scan report per repo (no file changes)\n'
         printf -- '- `revo detect` — bootstrap around existing repos in cwd\n'
@@ -4328,14 +4578,30 @@ _context_write_commands_file() {
         printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
         printf 'workspace copies, not the source tree.\n'
         printf '\n'
-        printf '## Issues (cross-repo, via gh CLI)\n'
+        printf '## Tracker Workflows\n'
         printf '\n'
-        printf -- '- `revo issue list [--tag t] [--state open|closed|all] [--label L] [--json]` — list issues across repos\n'
-        printf -- '- `revo issue create --repo <name> "title" [--body b] [--label L] [--feature F]` — create in one repo\n'
-        printf -- '- `revo issue create --tag <t> "title" [--body b] [--feature F]` — create in every matching repo, cross-referenced\n'
-        printf '\n'
-        printf 'Use `--json` on `revo issue list` to get a flat JSON array (each entry has\n'
-        printf 'a `repo` field) — easy to filter or pipe into jq.\n'
+        local tracker_provider
+        tracker_provider=$(yaml_get_effective_tracker_provider)
+        case "$tracker_provider" in
+            linear)
+                printf 'Configured provider: Linear. Use the Linear MCP/app for projects,\n'
+                printf 'milestones, issues, comments, status updates, and closeout.\n'
+                printf '`revo issue` intentionally does not call Linear from Bash.\n'
+                ;;
+            none)
+                printf 'Configured provider: none. Do not create tracker issues unless the\n'
+                printf 'user explicitly asks and provides the tracker to use.\n'
+                ;;
+            github|*)
+                printf 'Configured provider: GitHub issues via gh CLI.\n'
+                printf -- '- `revo issue list [--tag t] [--state open|closed|all] [--label L] [--json]` — list issues across repos\n'
+                printf -- '- `revo issue create --repo <name> "title" [--body b] [--label L] [--feature F]` — create in one repo\n'
+                printf -- '- `revo issue create --tag <t> "title" [--body b] [--feature F]` — create in every matching repo, cross-referenced\n'
+                printf '\n'
+                printf 'Use `--json` on `revo issue list` to get a flat JSON array (each entry has\n'
+                printf 'a `repo` field) — easy to filter or pipe into jq.\n'
+                ;;
+        esac
         printf '\n'
         printf '## Tag Filtering\n'
         printf '\n'
@@ -4416,7 +4682,7 @@ _context_detect_type() {
 # Interactive mode: walk each repo and ask for type + description.
 # Stores results in YAML_REPO_TYPES / YAML_REPO_DESCRIPTIONS and saves.
 _context_interactive() {
-    ui_step "Configure each repo for the workspace CLAUDE.md"
+    ui_step "Configure each repo for the workspace agent files"
     ui_info "$(ui_dim "Press enter to accept defaults, or type to override.")"
     ui_bar_line
 
@@ -4524,7 +4790,7 @@ _context_analyze() {
     printf '# Workspace Scan Report\n'
     printf '\n'
     printf 'Generated by `revo context --analyze`. Use this to write better\n'
-    printf 'descriptions in revo.yaml, then run `revo context --auto` to regenerate CLAUDE.md.\n'
+    printf 'descriptions in revo.yaml, then run `revo context --auto` to regenerate agent files.\n'
     printf '\n'
 
     local i
@@ -4642,7 +4908,7 @@ _context_analyze() {
     printf '## Next Steps\n\n'
     printf 'Read the key files above (especially entry points and README) to understand\n'
     printf 'each repo, then update revo.yaml with accurate `type` and `description`\n'
-    printf 'fields. Run `revo context --auto` to regenerate CLAUDE.md.\n'
+    printf 'fields. Run `revo context --auto` to regenerate agent files.\n'
     printf '\n'
     printf 'Example revo.yaml entry:\n'
     printf '```yaml\n'
@@ -4662,13 +4928,13 @@ cmd_context() {
         case "$1" in
             --help|-h)
                 printf 'Usage: revo context [--auto] [--analyze]\n\n'
-                printf 'Scan repos and regenerate workspace CLAUDE.md with framework,\n'
+                printf 'Scan repos and regenerate configured workspace agent files with framework,\n'
                 printf 'routes, and dependency order for Claude Code to consume.\n\n'
                 printf 'Options:\n'
                 printf '  --auto      Skip interactive prompts, use auto-detected values\n'
                 printf '  --analyze   Output a detailed scan report per repo (no file changes).\n'
                 printf '              Read the report, update revo.yaml with type/description,\n'
-                printf '              then run `revo context --auto` to generate CLAUDE.md.\n'
+                printf '              then run `revo context --auto` to generate agent files.\n'
                 return 0
                 ;;
             --auto)
@@ -4693,7 +4959,7 @@ cmd_context() {
         return 0
     fi
 
-    ui_intro "Revo - Generate Workspace CLAUDE.md"
+    ui_intro "Revo - Generate Workspace Agent Files"
 
     if [[ $YAML_REPO_COUNT -eq 0 ]]; then
         ui_step_error "No repositories configured"
@@ -4711,37 +4977,34 @@ cmd_context() {
         _context_interactive
     fi
 
-    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
-
     ui_spinner_start "Scanning $YAML_REPO_COUNT repositories..."
-    _context_write_file "$output"
+    _context_write_configured_files
     # Persist any newly detected per-repo branches back to revo.yaml
     config_save
     ui_spinner_stop
     _context_write_commands_file
     ui_step_done "Scanned:" "$YAML_REPO_COUNT repositories"
-    ui_step_done "Wrote:" "CLAUDE.md"
+    ui_step_done "Wrote:" "$CONTEXT_WRITTEN_FILES"
     ui_step_done "Wrote:" ".revo/COMMANDS.md"
 
     if [[ $CONTEXT_CYCLE -eq 1 ]]; then
-        ui_step_error "Dependency cycle detected - see CLAUDE.md for order"
+        ui_step_error "Dependency cycle detected - see generated agent files for order"
     fi
 
-    ui_outro "Context generated. Point Claude Code at this workspace."
+    ui_outro "Context generated. Point your coding agent at this workspace."
 
     return 0
 }
 
 # Called automatically from cmd_clone after a successful clone batch.
-# Always rewrites the workspace CLAUDE.md so newly cloned repos show up.
+# Always rewrites configured workspace agent files so newly cloned repos show up.
 context_regenerate_silent() {
     [[ -z "$REVO_WORKSPACE_ROOT" ]] && return 0
     [[ $YAML_REPO_COUNT -eq 0 ]] && return 0
 
-    local output="$REVO_WORKSPACE_ROOT/CLAUDE.md"
-    _context_write_file "$output"
+    _context_write_configured_files
     _context_write_commands_file
-    ui_info "$(ui_dim "Regenerated CLAUDE.md for Claude Code")"
+    ui_info "$(ui_dim "Regenerated agent files: $CONTEXT_WRITTEN_FILES")"
     return 0
 }
 
@@ -5410,6 +5673,32 @@ revo issue create (--repo NAME | --tag TAG) "TITLE" [options]
 EOF
 }
 
+_issue_require_github_provider() {
+    local provider
+    provider=$(yaml_get_effective_tracker_provider)
+
+    case "$provider" in
+        github)
+            return 0
+            ;;
+        linear)
+            ui_step_error "This workspace uses Linear for tracker work."
+            ui_info "Use the Linear MCP/app for projects, milestones, issues, comments, status updates, and closeout."
+            ui_info "If Linear tools are unavailable, ask the user to connect Linear before changing tracker state."
+            return 1
+            ;;
+        none)
+            ui_step_error "This workspace has no configured issue tracker."
+            ui_info "Do not create or list tracker issues unless the user explicitly provides a tracker to use."
+            return 1
+            ;;
+        *)
+            ui_step_error "Unsupported tracker provider: $provider"
+            return 1
+            ;;
+    esac
+}
+
 # --- list ----------------------------------------------------------------
 
 _issue_list() {
@@ -5431,12 +5720,13 @@ _issue_list() {
         esac
     done
 
+    config_require_workspace || return 1
+    _issue_require_github_provider || return 1
+
     if ! command -v gh >/dev/null 2>&1; then
         ui_step_error "gh CLI not found. Install from https://cli.github.com/"
         return 1
     fi
-
-    config_require_workspace || return 1
 
     local repos
     repos=$(config_get_repos "$tag")
@@ -5619,12 +5909,13 @@ _issue_create() {
         return 1
     fi
 
+    config_require_workspace || return 1
+    _issue_require_github_provider || return 1
+
     if ! command -v gh >/dev/null 2>&1; then
         ui_step_error "gh CLI not found. Install from https://cli.github.com/"
         return 1
     fi
-
-    config_require_workspace || return 1
 
     # Resolve target repo paths
     local target_paths=()
@@ -6658,12 +6949,12 @@ EOF
 # --- Help ---
 show_help() {
     cat << EOF
-Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
+Revo - Agent-first multi-repo workspace manager v$REVO_VERSION
 
 Usage: revo <command> [options]
 
 Setup:
-  init                        Initialize workspace or regenerate CLAUDE.md
+  init                        Initialize workspace or regenerate agent files
   add URL [options]            Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
 
@@ -6702,13 +6993,13 @@ Examples:
   revo add git@github.com:org/shared-types.git --tags shared
   revo add git@github.com:org/backend.git --tags backend,api
   revo clone
-  revo init                                       # regenerate CLAUDE.md
+  revo init                                       # regenerate agent files
   revo feature clock-student --tag backend        # coordinated branch
   revo commit "wire up clock endpoint"
   revo push
   revo pr "Clock endpoint for students" --tag backend
   revo issue list --state open                       # all open issues
-  revo issue list --tag backend --json               # JSON for Claude/jq
+  revo issue list --tag backend --json               # JSON for agents/jq
   revo issue create --repo backend "Add stats endpoint"
   revo issue create --tag mobile --feature stats "Add statistics screen"
   revo workspace clock-student                    # isolated copy of all repos

@@ -11,7 +11,7 @@ cmd_detect() {
                 printf 'Usage: revo detect\n\n'
                 printf 'Auto-detect git repositories in the current directory and\n'
                 printf 'bootstrap a revo workspace around them. Generates revo.yaml\n'
-                printf 'and CLAUDE.md from what it finds.\n'
+                printf 'and configured agent files from what it finds.\n'
                 return 0
                 ;;
             *)
@@ -22,7 +22,7 @@ cmd_detect() {
     done
 
     if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        ui_step_error "Workspace already initialized — run 'revo context' to regenerate CLAUDE.md"
+        ui_step_error "Workspace already initialized — run 'revo context' to regenerate agent files"
         return 1
     fi
 

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Revo CLI - Claude-first multi-repo workspace manager
+# Revo CLI - Agent-first multi-repo workspace manager
 # https://github.com/jippylong12/revo
-# Fork of Mars (https://github.com/dean0x/mars) with Claude-first additions
+# Fork of Mars (https://github.com/dean0x/mars) with agent-first additions
 
 set -euo pipefail
 
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="1.0.0"
+REVO_VERSION="2.0.0"
 
 # Determine script directory for sourcing libs
 REVO_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -44,12 +44,12 @@ fi
 # --- Help ---
 show_help() {
     cat << EOF
-Revo - Claude-first multi-repo workspace manager v$REVO_VERSION
+Revo - Agent-first multi-repo workspace manager v$REVO_VERSION
 
 Usage: revo <command> [options]
 
 Setup:
-  init                        Initialize workspace or regenerate CLAUDE.md
+  init                        Initialize workspace or regenerate agent files
   add URL [options]            Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
 
@@ -88,13 +88,13 @@ Examples:
   revo add git@github.com:org/shared-types.git --tags shared
   revo add git@github.com:org/backend.git --tags backend,api
   revo clone
-  revo init                                       # regenerate CLAUDE.md
+  revo init                                       # regenerate agent files
   revo feature clock-student --tag backend        # coordinated branch
   revo commit "wire up clock endpoint"
   revo push
   revo pr "Clock endpoint for students" --tag backend
   revo issue list --state open                       # all open issues
-  revo issue list --tag backend --json               # JSON for Claude/jq
+  revo issue list --tag backend --json               # JSON for agents/jq
   revo issue create --repo backend "Add stats endpoint"
   revo issue create --tag mobile --feature stats "Add statistics screen"
   revo workspace clock-student                    # isolated copy of all repos

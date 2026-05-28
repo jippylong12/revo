@@ -3,9 +3,9 @@
 [![npm](https://img.shields.io/npm/v/@revotools/cli)](https://www.npmjs.com/package/@revotools/cli)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Revo is a Claude-first multi-repo workspace manager. You install it, point it at your repos, and then talk to Claude — Claude reads a generated `CLAUDE.md` that maps the entire workspace (frameworks, dependencies, routes, active features) and uses revo commands to work across repos: creating isolated workspaces, committing, pushing, opening PRs, and closing everything out when done.
+Revo is an agent-first multi-repo workspace manager. You install it, point it at your repos, and then talk to your coding agent — the agent reads generated instruction files such as `AGENTS.md` and `CLAUDE.md` that map the entire workspace (frameworks, dependencies, routes, active features, tracker provider) and uses revo commands to work across repos: creating isolated workspaces, committing, pushing, opening PRs, and closing everything out when done.
 
-The intended workflow is: **set up once, then stay in Claude.** You shouldn't need to memorize revo commands — Claude knows them. Just say what you want done.
+The intended workflow is: **set up once, then stay in your agent.** You shouldn't need to memorize revo commands — the generated instructions teach the agent. Just say what you want done.
 
 ## Install and Set Up
 
@@ -14,14 +14,14 @@ npm install -g @revotools/cli
 revo --version
 
 cd ~/code/my-project        # your folder of repos (or an empty directory)
-revo init                   # auto-detects existing repos, writes CLAUDE.md
+revo init                   # auto-detects repos, writes agent instructions
 ```
 
-That's it. Open Claude Code in the workspace directory and start talking.
+That's it. Open your coding agent in the workspace directory and start talking.
 
-## Talk to Claude
+## Talk to Your Agent
 
-Once the workspace is set up, you work through Claude:
+Once the workspace is set up, you work through your coding agent:
 
 ```
 > "use revo to add this repo: git@github.com:org/backend.git with tags backend,api"
@@ -35,13 +35,13 @@ Once the workspace is set up, you work through Claude:
 > /revo:closeout
 ```
 
-Claude reads the generated `CLAUDE.md`, understands the repo layout and dependencies, and uses revo commands to execute. You stay in the conversation — revo handles the cross-repo coordination underneath.
+The agent reads the generated instruction files, understands the repo layout, dependencies, and tracker provider, and uses revo commands to execute. You stay in the conversation — revo handles the cross-repo coordination underneath.
 
-### Claude Code Skills
+### Agent Skills
 
-Revo ships with Claude Code skills that you can invoke directly:
+Revo can ship with coding-agent skills that you can invoke directly:
 
-- **`/revo:closeout`** — wraps up a workspace: merges branches back to main, cleans up the workspace, drops test databases, summarizes and closes linked GitHub issues
+- **`/revo:closeout`** — wraps up a workspace: merges branches back to main, cleans up the workspace, drops test databases, summarizes work, and closes linked tracker issues when the configured provider supports it
 
 ## What Revo Does
 
@@ -79,14 +79,15 @@ Workspace database names are suffixed with `_ws_<workspace>` and guarded so Revo
 
 ### Context generation
 
-`revo init` scans every repo and writes a `CLAUDE.md` that tells Claude:
+`revo init` scans every repo and writes configured agent files (`AGENTS.md`, `CLAUDE.md`, or both) that tell the agent:
 - Per-repo: type, description, language, framework, API routes, Docker status
 - Dependency order (topological sort from `depends_on`, when defined)
 - Active workspaces with paths and database names
 - Active features with links to `.revo/features/*.md`
-- Workflow instructions so Claude knows how to use revo
+- Tracker source of truth (`github`, `linear`, or `none`)
+- Workflow instructions so the agent knows how to use revo
 
-On first init, revo detects repos and prompts Claude to analyze each one and generate accurate descriptions — or lets you provide your own. Descriptions and types are stored in `revo.yaml` and used in the generated `CLAUDE.md`.
+On first init, revo detects repos and prompts the agent to analyze each one and generate accurate descriptions — or lets you provide your own. Descriptions and types are stored in `revo.yaml` and used in the generated agent files.
 
 Use `revo context --auto` to regenerate context without prompts, or `revo context --analyze` to print the per-repo scan report. Detected database structure is shown in context, but raw `.env` connection strings and passwords are not emitted.
 
@@ -103,9 +104,21 @@ revo sync --tag backend                # pull latest on backend repos
 
 `revo status` reports dirty repos, branch state, ahead/behind counts, and repos with no upstream. `revo checkout <branch>` only checks out real local or `origin/<branch>` branches; it does not treat tags or arbitrary revisions as branches.
 
-### GitHub issue workflows
+### Tracker workflows
 
-Revo can list and create GitHub issues across configured repos using the GitHub CLI:
+Revo uses `tracker.provider` in `revo.yaml` to tell agents where tracker work belongs:
+
+```yaml
+agents:
+  files: [AGENTS.md, CLAUDE.md]
+tracker:
+  provider: github # github | linear | none
+  linear:
+    team: ""
+    project: ""
+```
+
+With `provider: github`, Revo can list and create GitHub issues across configured repos using the GitHub CLI:
 
 ```bash
 revo issue list --state open
@@ -116,6 +129,10 @@ revo issue create --tag mobile --feature stats "Add statistics screen"
 
 `revo issue list --json` emits one flat JSON array across repos and is suitable for piping into tools such as `jq`.
 
+With `provider: linear`, Revo does not call Linear from Bash. Generated agent instructions direct the agent to use the Linear MCP/app for projects, milestones, issues, comments, status updates, and closeout. If Linear tools are unavailable, the agent should stop and ask the user to connect Linear.
+
+With `provider: none`, generated instructions omit tracker commands and tell agents not to create tracker issues unless the user explicitly provides a tracker.
+
 ### Auto-logged feature tracking
 
 When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<name>.md` — timestamp, message, repos, and SHAs. The closeout skill reads this instead of re-discovering from git.
@@ -125,7 +142,7 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | Command | Description |
 |---------|-------------|
 | `revo init` | Initialize workspace, detect repos, prompt for descriptions |
-| `revo context [--auto]` | Regenerate CLAUDE.md (interactive by default, `--auto` skips prompts) |
+| `revo context [--auto]` | Regenerate configured agent files (interactive by default, `--auto` skips prompts) |
 | `revo context --analyze` | Output detailed per-repo scan report |
 | `revo add <url> [options]` | Add a repo (`--tags`, `--depends-on`, `--database type:name`) |
 | `revo clone [--tag TAG]` | Clone configured repos |
@@ -137,7 +154,7 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo commit <msg>` | Commit across dirty repos |
 | `revo push` | Push branches across repos |
 | `revo pr <title>` | Create coordinated PRs via `gh` |
-| `revo issue list\|create` | List/create GitHub issues across repos |
+| `revo issue list\|create` | List/create GitHub issues when `tracker.provider: github` |
 | `revo status` | Branch and dirty state across repos |
 | `revo sync` | Pull latest changes |
 | `revo branch <name>` | Create branch across repos |
@@ -154,6 +171,13 @@ Repository paths must be safe relative paths. `revo add --path` and config parsi
 version: 1
 workspace:
   name: "my-project"
+agents:
+  files: [AGENTS.md, CLAUDE.md]
+tracker:
+  provider: github
+  linear:
+    team: ""
+    project: ""
 repos:
   - url: git@github.com:org/shared-types.git
     tags: [shared]
@@ -176,11 +200,11 @@ defaults:
   branch: main
 ```
 
-`type` and `description` are set during `revo init` (Claude analyzes each repo or you provide them). They drive the generated `CLAUDE.md` context.
+`type` and `description` are set during `revo init` (the agent analyzes each repo or you provide them). They drive the generated agent context.
 
 ## Credits
 
-Fork of [Mars](https://github.com/dean0x/mars) by [@dean0x](https://github.com/dean0x). Pure bash 3.2+, no dependencies beyond `git` (and `gh` for PRs/issues).
+Fork of [Mars](https://github.com/dean0x/mars) by [@dean0x](https://github.com/dean0x). Pure bash 3.2+, no dependencies beyond `git` (and `gh` for PRs/GitHub issues).
 
 ## License
 

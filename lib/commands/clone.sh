@@ -100,7 +100,7 @@ cmd_clone() {
         fi
     done <<< "$repos"
 
-    # Persist any newly detected per-repo branches and regenerate CLAUDE.md
+    # Persist any newly detected per-repo branches and regenerate agent files
     # so newly cloned repos appear in the context immediately.
     if [[ $fail_count -eq 0 ]] && { [[ $success_count -gt 0 ]] || [[ $skip_count -gt 0 ]]; }; then
         if [[ $success_count -gt 0 ]]; then

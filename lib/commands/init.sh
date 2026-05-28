@@ -93,11 +93,12 @@ _init_scan_existing() {
     fi
 }
 
-# Write a Claude-first onboarding CLAUDE.md if and only if the workspace
-# root has no CLAUDE.md yet. Existing files are left alone — `revo context`
+# Write an onboarding agent instruction file if and only if the workspace root
+# has no file at that path yet. Existing files are left alone — `revo context`
 # will append its marker-wrapped auto block once repos are added.
-_init_write_claude_md() {
-    local out="$REVO_WORKSPACE_ROOT/CLAUDE.md"
+_init_write_agent_md() {
+    local agent_file="$1"
+    local out="$REVO_WORKSPACE_ROOT/$agent_file"
 
     if [[ -f "$out" ]]; then
         return 0
@@ -117,7 +118,7 @@ The user may give you repo URLs or descriptions. Use these commands to set up:
 ```bash
 revo add <git-url> --tags <tag1,tag2> [--depends-on <repo-name>]
 revo clone
-revo context    # regenerates this file with full repo details
+revo context    # regenerates configured agent files with full repo details
 ```
 
 Example:
@@ -138,7 +139,6 @@ Use `revo status` to see all repos, branches, and dirty state.
 - `revo commit "msg"` — commit all dirty repos with same message
 - `revo push` — push all repos
 - `revo pr "title"` — create coordinated PRs via gh CLI
-- `revo exec "cmd" --tag <tag>` — run command in filtered repos
 - `revo context` — regenerate this file after repos change
 - `revo add <url> --tags <t> --depends-on <d>` — add a repo
 
@@ -146,7 +146,7 @@ Use `revo status` to see all repos, branches, and dirty state.
 All commands support `--tag <tag>` to target specific repos:
 
 ```bash
-revo exec "npm test" --tag frontend
+revo status --tag frontend
 revo sync --tag backend
 revo branch hotfix --tag api
 ```
@@ -163,7 +163,21 @@ revo branch hotfix --tag api
 Run `revo context` after cloning to populate repo details and dependency order.
 EOF
 
-    ui_step_done "Created CLAUDE.md (Claude reads this automatically)"
+    ui_step_done "Created:" "$agent_file"
+}
+
+_init_write_agent_files() {
+    local files
+    files=$(yaml_get_effective_agent_files)
+
+    local old_ifs="$IFS"
+    local agent_file
+    IFS=','
+    for agent_file in $files; do
+        [[ -z "$agent_file" ]] && continue
+        _init_write_agent_md "$agent_file"
+    done
+    IFS="$old_ifs"
 }
 
 cmd_init() {
@@ -214,12 +228,12 @@ cmd_init() {
         ui_info "For repos to analyze, read entry points and source code to"
         ui_info "understand what each repo does and how they relate to each other."
         ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
-        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
-        ui_outro "Descriptions ready? Run 'revo context --auto' to generate CLAUDE.md."
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate configured agent files."
+        ui_outro "Descriptions ready? Run 'revo context --auto' to generate agent files."
         return 0
     fi
 
-    ui_intro "Revo - Claude-first Multi-Repo Workspace"
+    ui_intro "Revo - Agent-first Multi-Repo Workspace"
 
     # Default workspace name to current directory basename so init can run
     # non-interactively. The user can still override by typing a value.
@@ -299,11 +313,11 @@ cmd_init() {
         fi
     fi
 
-    # If we detected repos, write basic CLAUDE.md and prompt Claude to
+    # If we detected repos, write basic agent files and prompt the agent to
     # analyze each repo for descriptions.
     if [[ $detected_count -gt 0 ]]; then
         ui_bar_line
-        _init_write_claude_md
+        _init_write_agent_files
         ui_bar_line
         ui_info "$(ui_bold "$detected_count repo(s) detected but descriptions are not set.")"
         ui_info ""
@@ -314,12 +328,12 @@ cmd_init() {
         ui_info "For repos to analyze, read entry points and source code to"
         ui_info "understand what each repo does and how they relate to each other."
         ui_info "Then edit $(ui_cyan "revo.yaml") to set $(ui_bold "type") and $(ui_bold "description") for each"
-        ui_info "repo and run $(ui_cyan "revo context --auto") to generate CLAUDE.md."
+        ui_info "repo and run $(ui_cyan "revo context --auto") to generate configured agent files."
         ui_outro "Run 'revo init' again after setting descriptions."
         return 0
     fi
 
-    _init_write_claude_md
+    _init_write_agent_files
 
     ui_outro "Workspace initialized! Run 'revo add <url>' to add repositories."
     return 0
