@@ -137,20 +137,41 @@ Always run `./build.sh` before committing changes to source files.
 
 ## Release Process
 
-1. Update version in `package.json`, `revo`, and `build.sh`
-2. Commit: `git commit -am "Bump version to X.Y.Z"`
-3. Tag: `git tag vX.Y.Z`
-4. Push: `git push origin main --tags`
+Releases are published manually from a maintainer's machine. The repo is a
+fork of dean0x/mars, and GitHub keeps Actions workflows switched off on forks
+until someone enables them in the Actions tab. That has never been done, so
+`.github/workflows/release.yml` does not run on a tag push and no release has
+ever shipped through it. Every published version came from `npm publish` run
+locally. Keep it that way unless you deliberately enable Actions and add the
+`NPM_TOKEN` secret.
 
-CI automatically handles:
+1. Bump the version in all three places (they must match the tag exactly):
+   `package.json`, `REVO_VERSION` in `revo`, and `REVO_VERSION` in `build.sh`.
+2. Add a `CHANGELOG.md` entry and run `./build.sh` so `dist/revo` carries the
+   new version. Run the full test suite as described above.
+3. Commit: `git commit -am "Release X.Y.Z: short summary"`
+4. Tag with the full three-part version: `git tag vX.Y.Z` (`v2.1` is wrong,
+   `v2.1.0` is right).
+5. Push: `git push origin main` then `git push origin vX.Y.Z`. Avoid
+   `--tags`; old local tags that differ from the remote get rejected and
+   clutter the output.
+6. Log in to npm if `npm whoami` fails (saved tokens expire):
+   `npm login`
+7. Publish: `npm publish --access public`
+8. Confirm: `npm view @revotools/cli version`
+9. Optional GitHub Release with the binary attached:
+   `gh release create vX.Y.Z dist/revo --generate-notes --title "vX.Y.Z"`
+10. Install the new version locally:
+    `npm install -g @revotools/cli@X.Y.Z && revo --version`
 
-- Run tests
-- Verify tag version matches `package.json`
-- Create GitHub Release with `dist/revo` binary attached
-- Publish to npm (`revo-cli`)
+Checklist before step 7: `grep -n "X.Y.Z" package.json revo build.sh` prints
+three lines.
 
-### Required Secrets (Maintainers)
+### Why the release workflow is still in the repo
 
-| Secret | Purpose |
-|--------|---------|
-| `NPM_TOKEN` | npm publish access token |
+`release.yml` is kept as the reference automation. If a maintainer ever
+wants tag-driven releases: open the Actions tab once, enable workflows on
+the fork, add an `NPM_TOKEN` repository secret, and then a `vX.Y.Z` tag push
+runs tests, checks the tag against `package.json`, creates the GitHub
+Release, and publishes to npm. Until then, the steps above are the only
+release path.

@@ -204,14 +204,13 @@ and drops it on `revo workspace --delete` or `--clean`. The DB CLI tools
 
 ## Release Process
 
-Releases use semantic version tags with `v` prefix (e.g., `v0.2.0`).
-
-**Tag format**: `v<major>.<minor>.<patch>` — the `v` prefix is required for CI to trigger.
-
-**Process**:
-1. Update version in `package.json` and `REVO_VERSION` in `revo` + `build.sh`
-2. Commit: `git commit -am "Bump version to 0.2.0"`
-3. Tag: `git tag v0.2.0`
-4. Push: `git push origin main --tags`
-
-CI automatically handles GitHub Release and npm publish.
+Releases are manual. GitHub Actions never runs in this repo (it is a fork of
+dean0x/mars and workflows on forks stay disabled until enabled in the Actions
+tab, which has not been done), so a tag push publishes nothing. Follow the
+"Release Process" section in `CONTRIBUTING.md` step by step: bump
+`package.json`, `REVO_VERSION` in `revo`, and `REVO_VERSION` in `build.sh`;
+add a `CHANGELOG.md` entry; run `./build.sh` and the tests; commit; tag
+`vX.Y.Z` (three parts, `v` prefix); push `main` and the tag; `npm login` if
+`npm whoami` fails; `npm publish --access public`; confirm with
+`npm view @revotools/cli version`. Never run `npm publish` or push without
+Marcus asking for that release.
