@@ -58,7 +58,39 @@ revo workspace auth-overhaul
 
 When you run `revo` from inside `.revo/workspaces/<name>/`, commands automatically target the workspace copies instead of the original repos under `repos/`. Revo requires `.revo/` to be ignored at the workspace root before creating a workspace, because workspace copies include local config and `.env` files by design.
 
-Workspace copies preserve normal in-repo symlinks but prune symlinks that point outside the repo, and they skip generated directories such as `node_modules`, `.venv`, `.gradle`, `target`, `.next`, `dist`, `build`, `coverage`, `.cache`, `.turbo`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, and `.pnpm-store`.
+Workspace copies preserve normal in-repo symlinks but prune symlinks that point outside the repo. By default they skip:
+
+- **Dependencies and build output:** `node_modules`, `.venv`, `venv`, `.gradle`, `target`, `.next`, `.nuxt`, `__pycache__`, `.dart_tool`, `Pods`, `dist`, `build`, `coverage`, `.cache`, `.turbo`, `.parcel-cache`, `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.tox`, `.pnpm-store`.
+- **Scratch and logs at the repo root:** `/tmp/` and `/log/`. Nested folders with those names (say `app/models/log/`) are still copied.
+- **Editor and tool state:** `.idea`, `.vscode`, `.ruby-lsp`, `.firebase`, and Flutter's regenerated `.symlinks` and `ephemeral` folders.
+- **Noise and local dumps:** `.DS_Store`, `*.log`, `*.dump`, `*.tsbuildinfo`.
+
+Tracked files under a skipped path come back after the copy, so `tmp/.keep`, `tmp/pids/.keep`, `log/.keep`, and a committed `.vscode/settings.json` are still there and `git status` stays clean.
+
+After each repo is copied, revo prints its total size, file count, and five largest top-level folders. Any top-level folder over 100 MB gets a warning naming the `exclude:` entry that would skip it.
+
+#### Tuning the copy
+
+Add project or repo patterns in `revo.yaml`:
+
+```yaml
+workspace:
+  name: "my-project"
+  exclude: [latest.dump, "*.sqlite3"]   # skipped in every repo
+repos:
+  - url: git@github.com:org/backend.git
+    exclude: [/storage]                 # skipped in this repo only
+    include: [.vscode]                  # copy .vscode for this repo after all
+```
+
+The effective list is the defaults, then `workspace.exclude`, then the repo's `exclude`, minus the repo's `include`. Patterns follow `.gitignore` rules:
+
+- `name` matches a file or folder with that name at any depth.
+- A leading `/`, or a `/` in the middle, anchors the pattern to the repo root.
+- A trailing `/` matches folders only.
+- `*` and `?` glob within one name. Quote globs in YAML: `["*.dump"]`.
+
+An `include` entry removes every exclude entry with the same name, ignoring leading and trailing slashes, so `include: [tmp]` copies `tmp/` again. It cannot re-include one folder inside an excluded one; revo warns when an `include` entry matches nothing. Use inline lists (`[a, b]`); patterns cannot contain `..` or target `.git`.
 
 ### Database cloning
 
@@ -188,6 +220,7 @@ repos:
     type: "backend"
     description: "Express REST API with PostgreSQL"
     depends_on: [shared-types]
+    exclude: [/storage]
     database:
       type: postgres
       name: myapp_dev
@@ -199,6 +232,8 @@ repos:
 defaults:
   branch: main
 ```
+
+`workspace.exclude`, `exclude`, and `include` are optional and only affect what `revo workspace` copies; see [Tuning the copy](#tuning-the-copy).
 
 `type` and `description` are set during `revo init` (the agent analyzes each repo or you provide them). They drive the generated agent context.
 

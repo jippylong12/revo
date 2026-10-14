@@ -137,6 +137,7 @@ global variable updates in bash 3.2.
 version: 1
 workspace:
   name: "project-name"
+  exclude: [latest.dump]       # optional: extra workspace copy excludes
 agents:
   files: [AGENTS.md, CLAUDE.md]
 tracker:
@@ -151,6 +152,8 @@ repos:
     path: api                    # optional custom path
     tags: [backend, api]
     depends_on: [shared-types]   # Revo-only: dependency ordering
+    exclude: [/storage]          # optional: extra copy excludes for this repo
+    include: [.vscode]           # optional: drop default excludes for this repo
     database:                    # optional: local DB to clone per workspace
       type: postgres             # postgres | mongodb | mysql
       name: myapp_dev            # local database name
@@ -168,6 +171,21 @@ sort in the generated agent files and has no effect on clone/sync order.
 `agents.files` controls which root-level instruction files are generated.
 `tracker.provider` controls whether tracker work is routed to GitHub issues,
 Linear MCP/app, or no tracker.
+
+`workspace.exclude` and per-repo `exclude`/`include` tune what
+`revo workspace` copies. The effective list is the built-in defaults
+(`WORKSPACE_DEFAULT_EXCLUDES` in `lib/commands/workspace.sh`), then
+`workspace.exclude`, then the repo's `exclude`, minus the repo's `include`.
+An `include` entry removes every exclude entry with the same name, ignoring
+leading and trailing slashes (`include: [tmp]` drops `/tmp/`); it does not
+re-include a sub-path of an excluded folder. Patterns follow `.gitignore`
+rules: `name` matches at any depth, a leading or middle `/` anchors to the
+repo root, a trailing `/` matches directories only, and `*`/`?` glob within a
+name. Use inline lists and quote globs (`["*.sqlite3"]`). After the copy,
+tracked files under excluded paths (`tmp/.keep`, `log/.keep`) are restored
+from the source, and a size report warns about any top-level directory over
+100 MB. Both copy paths (rsync and the find fallback) read the one
+`WORKSPACE_EXCLUDES` array, so keep new defaults in that list only.
 
 `database` is optional. When present, `revo workspace` clones the named
 database to a workspace-scoped copy (e.g., `myapp_dev_ws_feature_name`)

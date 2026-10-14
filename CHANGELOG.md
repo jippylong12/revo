@@ -1,5 +1,34 @@
 # Changelog
 
+## [2.1.0] - 2026-10-14
+
+### Added
+- `workspace.exclude` in `revo.yaml`, plus per-repo `exclude` and `include`
+  lists, to tune what `revo workspace` copies without editing revo. The
+  effective list is the defaults, then `workspace.exclude`, then the repo's
+  `exclude`, minus the repo's `include`. Patterns follow `.gitignore` rules
+  (`name`, `/anchored`, `dir/`, `*` globs). `revo add` and other config
+  rewrites keep these keys.
+- A size report after each repo copy: total size, file count, and the five
+  largest top-level folders. Folders over 100 MB get a warning naming the
+  `exclude:` entry that would skip them.
+
+### Changed
+- `revo workspace` now also skips root `tmp/` and `log/`, `.idea`, `.vscode`,
+  `.ruby-lsp`, `.firebase`, Flutter `.symlinks` and `ephemeral`, `.DS_Store`,
+  `*.log`, `*.dump`, and `*.tsbuildinfo`. For a Rails API this drops
+  hundreds of MB of cache, test storage, and ad hoc logs per workspace.
+  `storage/` is still copied by default because a cloned dev database
+  points at those blobs; opt out per repo with `exclude: [/storage]`.
+- The exclude list is defined once and shared by the rsync copy and the
+  find fallback, so the two paths can no longer drift.
+
+### Fixed
+- Tracked files under excluded paths are restored after the copy. This
+  brings back `tmp/.keep`, `tmp/pids/.keep`, and `log/.keep` (Puma needs
+  `tmp/pids`), and stops committed files such as `dist/` bundles or
+  `.vscode/settings.json` from showing as deleted in the workspace.
+
 ## [2.0.0] - 2026-05-28
 
 ### Added

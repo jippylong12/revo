@@ -851,6 +851,142 @@ EOF
 
 printf "\n=== YAML Parser Tests ===\n\n"
 
+test_copy_patterns_parse() {
+    test_start "yaml_parse - workspace.exclude and repo exclude/include"
+    local tmp_dir="/tmp/revo/yaml_test_$$_patterns"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+    cat > "$tmp_dir/revo.yaml" << 'EOF2'
+version: 1
+workspace:
+  name: "patterns"
+  exclude: [latest.dump, "*.sqlite3"]
+repos:
+  - url: git@github.com:org/api.git
+    tags: [backend]
+    exclude: [/storage, "ios/Flutter/ephemeral/"]
+    include: [tmp]
+    database:
+      type: postgres
+      name: api_dev
+  - url: git@github.com:org/web.git
+defaults:
+  branch: main
+EOF2
+
+    if ! yaml_parse "$tmp_dir/revo.yaml"; then
+        rm -rf "$tmp_dir"
+        test_fail "parse failed"
+        return 0
+    fi
+
+    assert_eq "latest.dump,*.sqlite3" "$(yaml_get_workspace_excludes)" "workspace excludes" \
+        && assert_eq "/storage,ios/Flutter/ephemeral/" "$(yaml_get_excludes 0)" "repo excludes" \
+        && assert_eq "tmp" "$(yaml_get_includes 0)" "repo includes" \
+        && assert_eq "" "$(yaml_get_excludes 1)" "second repo excludes" \
+        && assert_eq "" "$(yaml_get_includes 1)" "second repo includes" \
+        && assert_eq "patterns" "$YAML_WORKSPACE_NAME" "workspace name" \
+        && assert_eq "postgres" "$(yaml_get_db_type 0)" "db type still parsed" \
+        && test_pass
+
+    test_start "yaml_write - round-trips exclude/include"
+    yaml_write "$tmp_dir/out.yaml"
+    if ! yaml_parse "$tmp_dir/out.yaml"; then
+        rm -rf "$tmp_dir"
+        test_fail "re-parse failed"
+        return 0
+    fi
+    if grep -q 'exclude: \[latest.dump, "\*.sqlite3"\]' "$tmp_dir/out.yaml"; then
+        assert_eq "latest.dump,*.sqlite3" "$(yaml_get_workspace_excludes)" "workspace excludes" \
+            && assert_eq "/storage,ios/Flutter/ephemeral/" "$(yaml_get_excludes 0)" "repo excludes" \
+            && assert_eq "tmp" "$(yaml_get_includes 0)" "repo includes" \
+            && test_pass
+    else
+        test_fail "glob pattern was not written quoted"
+    fi
+
+    test_start "yaml_add_repo - new repo has empty exclude/include"
+    yaml_add_repo "git@github.com:org/extra.git"
+    assert_eq "" "$(yaml_get_excludes 2)" "excludes" \
+        && assert_eq "" "$(yaml_get_includes 2)" "includes" \
+        && test_pass
+
+    rm -rf "$tmp_dir"
+}
+
+test_copy_patterns_rejected() {
+    local tmp_dir="/tmp/revo/yaml_test_$$_bad_patterns"
+    rm -rf "$tmp_dir"
+    mkdir -p "$tmp_dir"
+
+    test_start "yaml_validate_copy_pattern - accepts globs, anchors, dir suffix"
+    if yaml_validate_copy_pattern "storage" && yaml_validate_copy_pattern "/tmp/" \
+        && yaml_validate_copy_pattern "*.log" && yaml_validate_copy_pattern "ios/Flutter/ephemeral"; then
+        test_pass
+    else
+        test_fail "valid pattern rejected"
+    fi
+
+    test_start "yaml_validate_copy_pattern - rejects traversal, .git, bare globs"
+    if yaml_validate_copy_pattern "../outside" || yaml_validate_copy_pattern "a/../b" \
+        || yaml_validate_copy_pattern ".git" || yaml_validate_copy_pattern "/.git/" \
+        || yaml_validate_copy_pattern "*" || yaml_validate_copy_pattern "/" \
+        || yaml_validate_copy_pattern "a//b" || yaml_validate_copy_pattern 'a;rm' \
+        || yaml_validate_copy_pattern "with space"; then
+        test_fail "unsafe pattern accepted"
+    else
+        test_pass
+    fi
+
+    test_start "yaml_parse - rejects repo exclude with traversal"
+    cat > "$tmp_dir/revo.yaml" << 'EOF2'
+version: 1
+workspace:
+  name: "bad"
+repos:
+  - url: git@github.com:org/api.git
+    exclude: [../secrets]
+EOF2
+    if yaml_parse "$tmp_dir/revo.yaml" 2>/dev/null; then
+        test_fail "traversal exclude accepted"
+    else
+        test_pass
+    fi
+
+    test_start "yaml_parse - rejects block-style workspace exclude"
+    cat > "$tmp_dir/revo.yaml" << 'EOF2'
+version: 1
+workspace:
+  name: "bad"
+  exclude:
+    - storage
+repos:
+  - url: git@github.com:org/api.git
+EOF2
+    if yaml_parse "$tmp_dir/revo.yaml" 2>/dev/null; then
+        test_fail "block list silently accepted"
+    else
+        test_pass
+    fi
+
+    test_start "yaml_parse - tags still reject glob characters"
+    cat > "$tmp_dir/revo.yaml" << 'EOF2'
+version: 1
+workspace:
+  name: "bad"
+repos:
+  - url: git@github.com:org/api.git
+    tags: ["*"]
+EOF2
+    if yaml_parse "$tmp_dir/revo.yaml" 2>/dev/null; then
+        test_fail "glob tag accepted"
+    else
+        test_pass
+    fi
+
+    rm -rf "$tmp_dir"
+}
+
 test_path_from_url
 test_repo_path_validation
 test_parse_rejects_hostile_repo_path
@@ -880,6 +1016,8 @@ test_tracker_provider_after_linear_block
 test_agents_tracker_roundtrip
 test_agents_rejects_unsupported_file
 test_tracker_rejects_unsupported_provider
+test_copy_patterns_parse
+test_copy_patterns_rejected
 
 printf "\n=== Results ===\n"
 printf "Passed: %d/%d\n" "$TESTS_PASSED" "$TESTS_RUN"

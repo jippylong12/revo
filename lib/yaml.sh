@@ -10,6 +10,8 @@ YAML_AGENT_FILES=""
 YAML_TRACKER_PROVIDER=""
 YAML_TRACKER_LINEAR_TEAM=""
 YAML_TRACKER_LINEAR_PROJECT=""
+# workspace.exclude: comma-separated copy-exclude patterns for every repo
+YAML_WORKSPACE_EXCLUDE=""
 YAML_REPO_COUNT=0
 
 # Arrays indexed by repo number (0, 1, 2, ...)
@@ -23,6 +25,14 @@ YAML_REPO_DB_TYPES=()
 YAML_REPO_DB_NAMES=()
 YAML_REPO_TYPES=()
 YAML_REPO_DESCRIPTIONS=()
+# Per-repo workspace copy patterns (comma-separated)
+YAML_REPO_EXCLUDES=()
+YAML_REPO_INCLUDES=()
+
+# Characters allowed in a plain inline-list item (tags, depends_on, ...)
+YAML_LIST_ITEM_RE='^[A-Za-z0-9._/-]+$'
+# Characters allowed in a workspace copy pattern (adds * and ? globs)
+YAML_PATTERN_ITEM_RE='^[A-Za-z0-9._/*?-]+$'
 
 _yaml_trim() {
     local value="$1"
@@ -68,9 +78,13 @@ _yaml_escape_double_quoted() {
     printf '%s' "$value"
 }
 
+# Parse an inline list ("[a, b, c]") into a comma-separated string.
+# Usage: _yaml_parse_inline_list "value" [item_regex]
+# item_regex defaults to YAML_LIST_ITEM_RE. Returns 1 on malformed input.
 _yaml_parse_inline_list() {
     local value
     value=$(_yaml_trim "$1")
+    local item_re="${2:-$YAML_LIST_ITEM_RE}"
     if [[ "$value" == *"] #"* ]]; then
         value="${value%%] #*}]"
     fi
@@ -95,7 +109,7 @@ _yaml_parse_inline_list() {
     local item parsed result=""
     for item in "${parts[@]}"; do
         parsed=$(_yaml_parse_scalar "$item") || return 1
-        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ $item_re ]]; then
             return 1
         fi
         if [[ -z "$result" ]]; then
@@ -108,9 +122,26 @@ _yaml_parse_inline_list() {
     printf '%s' "$result"
 }
 
+# Parse an inline list of workspace copy patterns (exclude/include).
+# Same syntax as other inline lists, but items may contain * and ? globs and
+# each item must pass yaml_validate_copy_pattern.
+_yaml_parse_pattern_list() {
+    local parsed
+    parsed=$(_yaml_parse_inline_list "$1" "$YAML_PATTERN_ITEM_RE") || return 1
+
+    local items=() item
+    IFS=',' read -r -a items <<< "$parsed"
+    for item in ${items[@]+"${items[@]}"}; do
+        yaml_validate_copy_pattern "$item" || return 1
+    done
+
+    printf '%s' "$parsed"
+}
+
 yaml_parse() {
     local file="$1"
     local line
+    local in_workspace=0
     local in_agents=0
     local in_tracker=0
     local in_tracker_linear=0
@@ -126,6 +157,7 @@ yaml_parse() {
     YAML_TRACKER_PROVIDER=""
     YAML_TRACKER_LINEAR_TEAM=""
     YAML_TRACKER_LINEAR_PROJECT=""
+    YAML_WORKSPACE_EXCLUDE=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
@@ -136,6 +168,8 @@ yaml_parse() {
     YAML_REPO_DB_NAMES=()
     YAML_REPO_TYPES=()
     YAML_REPO_DESCRIPTIONS=()
+    YAML_REPO_EXCLUDES=()
+    YAML_REPO_INCLUDES=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -152,6 +186,7 @@ yaml_parse() {
 
         # Check section markers
         if [[ "$trimmed" == "agents:" ]]; then
+            in_workspace=0
             in_agents=1
             in_tracker=0
             in_tracker_linear=0
@@ -159,6 +194,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "tracker:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=1
             in_tracker_linear=0
@@ -166,6 +202,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "repos:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
@@ -173,6 +210,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "defaults:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
@@ -180,11 +218,23 @@ yaml_parse() {
             in_defaults=1
             continue
         elif [[ "$trimmed" == "workspace:" ]]; then
+            in_workspace=1
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
             in_repos=0
             in_defaults=0
+            continue
+        fi
+
+        # Parse workspace.exclude (inline list of copy patterns)
+        if [[ $in_workspace -eq 1 ]] && [[ "$trimmed" =~ ^exclude:[[:space:]]*(.*)$ ]]; then
+            local ws_exclude
+            if ! ws_exclude=$(_yaml_parse_pattern_list "${trimmed#exclude:}"); then
+                printf 'Error: invalid workspace exclude list (use an inline list like [storage, "*.dump"])\n' >&2
+                return 1
+            fi
+            YAML_WORKSPACE_EXCLUDE="$ws_exclude"
             continue
         fi
 
@@ -291,6 +341,8 @@ yaml_parse() {
                 YAML_REPO_DB_NAMES[$current_index]=""
                 YAML_REPO_TYPES[$current_index]=""
                 YAML_REPO_DESCRIPTIONS[$current_index]=""
+                YAML_REPO_EXCLUDES[$current_index]=""
+                YAML_REPO_INCLUDES[$current_index]=""
                 in_database=0
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
@@ -319,6 +371,20 @@ yaml_parse() {
                         return 1
                     fi
                     YAML_REPO_DEPS[$current_index]="$deps_str"
+                elif [[ "$trimmed" =~ ^exclude:[[:space:]]*(.*)$ ]]; then
+                    local repo_exclude
+                    if ! repo_exclude=$(_yaml_parse_pattern_list "${trimmed#exclude:}"); then
+                        printf 'Error: invalid exclude list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_EXCLUDES[$current_index]="$repo_exclude"
+                elif [[ "$trimmed" =~ ^include:[[:space:]]*(.*)$ ]]; then
+                    local repo_include
+                    if ! repo_include=$(_yaml_parse_pattern_list "${trimmed#include:}"); then
+                        printf 'Error: invalid include list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_INCLUDES[$current_index]="$repo_include"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
                     local branch_val
                     if ! branch_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
@@ -411,6 +477,37 @@ yaml_validate_repo_path() {
         fi
     done
     IFS="$old_ifs"
+
+    return 0
+}
+
+# Validate one workspace copy pattern (workspace.exclude, repo exclude/include).
+# Patterns are relative to the repo root: "name" matches at any depth, a
+# leading "/" anchors to the repo root, a trailing "/" matches directories
+# only. Traversal, empty components, and patterns that would drop .git or
+# everything are rejected.
+yaml_validate_copy_pattern() {
+    local pattern="$1"
+
+    [[ -z "$pattern" ]] && return 1
+    [[ "$pattern" =~ $YAML_PATTERN_ITEM_RE ]] || return 1
+    [[ "$pattern" == *"//"* ]] && return 1
+
+    local core="${pattern#/}"
+    core="${core%/}"
+    [[ -z "$core" ]] && return 1
+
+    local old_ifs="$IFS"
+    local parts=() part
+    IFS='/' read -r -a parts <<< "$core"
+    IFS="$old_ifs"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ''|.|..|.git) return 1 ;;
+        esac
+        # A component made only of glob characters would drop everything
+        [[ "$part" =~ ^[*?]+$ ]] && return 1
+    done
 
     return 0
 }
@@ -535,6 +632,23 @@ yaml_get_db_name() {
     printf '%s' "${YAML_REPO_DB_NAMES[$idx]:-}"
 }
 
+# Get repo workspace exclude patterns by index (comma-separated)
+yaml_get_excludes() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_EXCLUDES[$idx]:-}"
+}
+
+# Get repo workspace include patterns by index (comma-separated)
+yaml_get_includes() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_INCLUDES[$idx]:-}"
+}
+
+# Get workspace-level exclude patterns (comma-separated)
+yaml_get_workspace_excludes() {
+    printf '%s' "${YAML_WORKSPACE_EXCLUDE:-}"
+}
+
 yaml_get_agent_files() {
     printf '%s' "${YAML_AGENT_FILES:-}"
 }
@@ -583,6 +697,24 @@ yaml_find_by_name() {
     return 1
 }
 
+# Format a comma-separated pattern list for an inline YAML list. Patterns
+# containing globs are double-quoted because a leading "*" is a YAML alias.
+_yaml_format_pattern_list() {
+    local items=() item out=""
+    IFS=',' read -r -a items <<< "$1"
+    for item in ${items[@]+"${items[@]}"}; do
+        case "$item" in
+            *[*?]*) item="\"$item\"" ;;
+        esac
+        if [[ -z "$out" ]]; then
+            out="$item"
+        else
+            out="$out, $item"
+        fi
+    done
+    printf '%s' "$out"
+}
+
 # Write revo.yaml
 # Usage: yaml_write "path/to/revo.yaml"
 yaml_write() {
@@ -594,7 +726,11 @@ yaml_write() {
         printf 'workspace:\n'
         local escaped_workspace
         escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
-        printf '  name: "%s"\n\n' "$escaped_workspace"
+        printf '  name: "%s"\n' "$escaped_workspace"
+        if [[ -n "${YAML_WORKSPACE_EXCLUDE:-}" ]]; then
+            printf '  exclude: [%s]\n' "$(_yaml_format_pattern_list "$YAML_WORKSPACE_EXCLUDE")"
+        fi
+        printf '\n'
 
         if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
             printf 'agents:\n'
@@ -664,6 +800,16 @@ yaml_write() {
                 printf '    branch: %s\n' "$branch"
             fi
 
+            # Write workspace copy patterns if present
+            local repo_excludes="${YAML_REPO_EXCLUDES[$i]:-}"
+            local repo_includes="${YAML_REPO_INCLUDES[$i]:-}"
+            if [[ -n "$repo_excludes" ]]; then
+                printf '    exclude: [%s]\n' "$(_yaml_format_pattern_list "$repo_excludes")"
+            fi
+            if [[ -n "$repo_includes" ]]; then
+                printf '    include: [%s]\n' "$(_yaml_format_pattern_list "$repo_includes")"
+            fi
+
             # Write database if present
             local db_type="${YAML_REPO_DB_TYPES[$i]:-}"
             local db_name="${YAML_REPO_DB_NAMES[$i]:-}"
@@ -707,6 +853,8 @@ yaml_add_repo() {
     YAML_REPO_DB_NAMES[$idx]="$db_name"
     YAML_REPO_TYPES[$idx]="$type"
     YAML_REPO_DESCRIPTIONS[$idx]="$description"
+    YAML_REPO_EXCLUDES[$idx]=""
+    YAML_REPO_INCLUDES[$idx]=""
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }

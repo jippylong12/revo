@@ -8,7 +8,7 @@ set -euo pipefail
 # Exit cleanly on SIGPIPE (e.g., revo clone | grep, revo status | head)
 trap 'exit 0' PIPE
 
-REVO_VERSION="2.0.0"
+REVO_VERSION="2.1.0"
 
 
 # === lib/ui.sh ===
@@ -481,6 +481,8 @@ YAML_AGENT_FILES=""
 YAML_TRACKER_PROVIDER=""
 YAML_TRACKER_LINEAR_TEAM=""
 YAML_TRACKER_LINEAR_PROJECT=""
+# workspace.exclude: comma-separated copy-exclude patterns for every repo
+YAML_WORKSPACE_EXCLUDE=""
 YAML_REPO_COUNT=0
 
 # Arrays indexed by repo number (0, 1, 2, ...)
@@ -494,6 +496,14 @@ YAML_REPO_DB_TYPES=()
 YAML_REPO_DB_NAMES=()
 YAML_REPO_TYPES=()
 YAML_REPO_DESCRIPTIONS=()
+# Per-repo workspace copy patterns (comma-separated)
+YAML_REPO_EXCLUDES=()
+YAML_REPO_INCLUDES=()
+
+# Characters allowed in a plain inline-list item (tags, depends_on, ...)
+YAML_LIST_ITEM_RE='^[A-Za-z0-9._/-]+$'
+# Characters allowed in a workspace copy pattern (adds * and ? globs)
+YAML_PATTERN_ITEM_RE='^[A-Za-z0-9._/*?-]+$'
 
 _yaml_trim() {
     local value="$1"
@@ -539,9 +549,13 @@ _yaml_escape_double_quoted() {
     printf '%s' "$value"
 }
 
+# Parse an inline list ("[a, b, c]") into a comma-separated string.
+# Usage: _yaml_parse_inline_list "value" [item_regex]
+# item_regex defaults to YAML_LIST_ITEM_RE. Returns 1 on malformed input.
 _yaml_parse_inline_list() {
     local value
     value=$(_yaml_trim "$1")
+    local item_re="${2:-$YAML_LIST_ITEM_RE}"
     if [[ "$value" == *"] #"* ]]; then
         value="${value%%] #*}]"
     fi
@@ -566,7 +580,7 @@ _yaml_parse_inline_list() {
     local item parsed result=""
     for item in "${parts[@]}"; do
         parsed=$(_yaml_parse_scalar "$item") || return 1
-        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+        if [[ -z "$parsed" ]] || [[ ! "$parsed" =~ $item_re ]]; then
             return 1
         fi
         if [[ -z "$result" ]]; then
@@ -579,9 +593,26 @@ _yaml_parse_inline_list() {
     printf '%s' "$result"
 }
 
+# Parse an inline list of workspace copy patterns (exclude/include).
+# Same syntax as other inline lists, but items may contain * and ? globs and
+# each item must pass yaml_validate_copy_pattern.
+_yaml_parse_pattern_list() {
+    local parsed
+    parsed=$(_yaml_parse_inline_list "$1" "$YAML_PATTERN_ITEM_RE") || return 1
+
+    local items=() item
+    IFS=',' read -r -a items <<< "$parsed"
+    for item in ${items[@]+"${items[@]}"}; do
+        yaml_validate_copy_pattern "$item" || return 1
+    done
+
+    printf '%s' "$parsed"
+}
+
 yaml_parse() {
     local file="$1"
     local line
+    local in_workspace=0
     local in_agents=0
     local in_tracker=0
     local in_tracker_linear=0
@@ -597,6 +628,7 @@ yaml_parse() {
     YAML_TRACKER_PROVIDER=""
     YAML_TRACKER_LINEAR_TEAM=""
     YAML_TRACKER_LINEAR_PROJECT=""
+    YAML_WORKSPACE_EXCLUDE=""
     YAML_REPO_COUNT=0
     YAML_REPO_URLS=()
     YAML_REPO_PATHS=()
@@ -607,6 +639,8 @@ yaml_parse() {
     YAML_REPO_DB_NAMES=()
     YAML_REPO_TYPES=()
     YAML_REPO_DESCRIPTIONS=()
+    YAML_REPO_EXCLUDES=()
+    YAML_REPO_INCLUDES=()
 
     if [[ ! -f "$file" ]]; then
         return 1
@@ -623,6 +657,7 @@ yaml_parse() {
 
         # Check section markers
         if [[ "$trimmed" == "agents:" ]]; then
+            in_workspace=0
             in_agents=1
             in_tracker=0
             in_tracker_linear=0
@@ -630,6 +665,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "tracker:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=1
             in_tracker_linear=0
@@ -637,6 +673,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "repos:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
@@ -644,6 +681,7 @@ yaml_parse() {
             in_defaults=0
             continue
         elif [[ "$trimmed" == "defaults:" ]]; then
+            in_workspace=0
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
@@ -651,11 +689,23 @@ yaml_parse() {
             in_defaults=1
             continue
         elif [[ "$trimmed" == "workspace:" ]]; then
+            in_workspace=1
             in_agents=0
             in_tracker=0
             in_tracker_linear=0
             in_repos=0
             in_defaults=0
+            continue
+        fi
+
+        # Parse workspace.exclude (inline list of copy patterns)
+        if [[ $in_workspace -eq 1 ]] && [[ "$trimmed" =~ ^exclude:[[:space:]]*(.*)$ ]]; then
+            local ws_exclude
+            if ! ws_exclude=$(_yaml_parse_pattern_list "${trimmed#exclude:}"); then
+                printf 'Error: invalid workspace exclude list (use an inline list like [storage, "*.dump"])\n' >&2
+                return 1
+            fi
+            YAML_WORKSPACE_EXCLUDE="$ws_exclude"
             continue
         fi
 
@@ -762,6 +812,8 @@ yaml_parse() {
                 YAML_REPO_DB_NAMES[$current_index]=""
                 YAML_REPO_TYPES[$current_index]=""
                 YAML_REPO_DESCRIPTIONS[$current_index]=""
+                YAML_REPO_EXCLUDES[$current_index]=""
+                YAML_REPO_INCLUDES[$current_index]=""
                 in_database=0
                 YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
                 continue
@@ -790,6 +842,20 @@ yaml_parse() {
                         return 1
                     fi
                     YAML_REPO_DEPS[$current_index]="$deps_str"
+                elif [[ "$trimmed" =~ ^exclude:[[:space:]]*(.*)$ ]]; then
+                    local repo_exclude
+                    if ! repo_exclude=$(_yaml_parse_pattern_list "${trimmed#exclude:}"); then
+                        printf 'Error: invalid exclude list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_EXCLUDES[$current_index]="$repo_exclude"
+                elif [[ "$trimmed" =~ ^include:[[:space:]]*(.*)$ ]]; then
+                    local repo_include
+                    if ! repo_include=$(_yaml_parse_pattern_list "${trimmed#include:}"); then
+                        printf 'Error: invalid include list for %s\n' "${YAML_REPO_URLS[$current_index]}" >&2
+                        return 1
+                    fi
+                    YAML_REPO_INCLUDES[$current_index]="$repo_include"
                 elif [[ "$trimmed" =~ ^branch:[[:space:]]*(.+)$ ]]; then
                     local branch_val
                     if ! branch_val=$(_yaml_parse_scalar "${BASH_REMATCH[1]}"); then
@@ -882,6 +948,37 @@ yaml_validate_repo_path() {
         fi
     done
     IFS="$old_ifs"
+
+    return 0
+}
+
+# Validate one workspace copy pattern (workspace.exclude, repo exclude/include).
+# Patterns are relative to the repo root: "name" matches at any depth, a
+# leading "/" anchors to the repo root, a trailing "/" matches directories
+# only. Traversal, empty components, and patterns that would drop .git or
+# everything are rejected.
+yaml_validate_copy_pattern() {
+    local pattern="$1"
+
+    [[ -z "$pattern" ]] && return 1
+    [[ "$pattern" =~ $YAML_PATTERN_ITEM_RE ]] || return 1
+    [[ "$pattern" == *"//"* ]] && return 1
+
+    local core="${pattern#/}"
+    core="${core%/}"
+    [[ -z "$core" ]] && return 1
+
+    local old_ifs="$IFS"
+    local parts=() part
+    IFS='/' read -r -a parts <<< "$core"
+    IFS="$old_ifs"
+    for part in ${parts[@]+"${parts[@]}"}; do
+        case "$part" in
+            ''|.|..|.git) return 1 ;;
+        esac
+        # A component made only of glob characters would drop everything
+        [[ "$part" =~ ^[*?]+$ ]] && return 1
+    done
 
     return 0
 }
@@ -1006,6 +1103,23 @@ yaml_get_db_name() {
     printf '%s' "${YAML_REPO_DB_NAMES[$idx]:-}"
 }
 
+# Get repo workspace exclude patterns by index (comma-separated)
+yaml_get_excludes() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_EXCLUDES[$idx]:-}"
+}
+
+# Get repo workspace include patterns by index (comma-separated)
+yaml_get_includes() {
+    local idx="$1"
+    printf '%s' "${YAML_REPO_INCLUDES[$idx]:-}"
+}
+
+# Get workspace-level exclude patterns (comma-separated)
+yaml_get_workspace_excludes() {
+    printf '%s' "${YAML_WORKSPACE_EXCLUDE:-}"
+}
+
 yaml_get_agent_files() {
     printf '%s' "${YAML_AGENT_FILES:-}"
 }
@@ -1054,6 +1168,24 @@ yaml_find_by_name() {
     return 1
 }
 
+# Format a comma-separated pattern list for an inline YAML list. Patterns
+# containing globs are double-quoted because a leading "*" is a YAML alias.
+_yaml_format_pattern_list() {
+    local items=() item out=""
+    IFS=',' read -r -a items <<< "$1"
+    for item in ${items[@]+"${items[@]}"}; do
+        case "$item" in
+            *[*?]*) item="\"$item\"" ;;
+        esac
+        if [[ -z "$out" ]]; then
+            out="$item"
+        else
+            out="$out, $item"
+        fi
+    done
+    printf '%s' "$out"
+}
+
 # Write revo.yaml
 # Usage: yaml_write "path/to/revo.yaml"
 yaml_write() {
@@ -1065,7 +1197,11 @@ yaml_write() {
         printf 'workspace:\n'
         local escaped_workspace
         escaped_workspace=$(_yaml_escape_double_quoted "$YAML_WORKSPACE_NAME")
-        printf '  name: "%s"\n\n' "$escaped_workspace"
+        printf '  name: "%s"\n' "$escaped_workspace"
+        if [[ -n "${YAML_WORKSPACE_EXCLUDE:-}" ]]; then
+            printf '  exclude: [%s]\n' "$(_yaml_format_pattern_list "$YAML_WORKSPACE_EXCLUDE")"
+        fi
+        printf '\n'
 
         if [[ -n "${YAML_AGENT_FILES:-}" ]]; then
             printf 'agents:\n'
@@ -1135,6 +1271,16 @@ yaml_write() {
                 printf '    branch: %s\n' "$branch"
             fi
 
+            # Write workspace copy patterns if present
+            local repo_excludes="${YAML_REPO_EXCLUDES[$i]:-}"
+            local repo_includes="${YAML_REPO_INCLUDES[$i]:-}"
+            if [[ -n "$repo_excludes" ]]; then
+                printf '    exclude: [%s]\n' "$(_yaml_format_pattern_list "$repo_excludes")"
+            fi
+            if [[ -n "$repo_includes" ]]; then
+                printf '    include: [%s]\n' "$(_yaml_format_pattern_list "$repo_includes")"
+            fi
+
             # Write database if present
             local db_type="${YAML_REPO_DB_TYPES[$i]:-}"
             local db_name="${YAML_REPO_DB_NAMES[$i]:-}"
@@ -1178,6 +1324,8 @@ yaml_add_repo() {
     YAML_REPO_DB_NAMES[$idx]="$db_name"
     YAML_REPO_TYPES[$idx]="$type"
     YAML_REPO_DESCRIPTIONS[$idx]="$description"
+    YAML_REPO_EXCLUDES[$idx]=""
+    YAML_REPO_INCLUDES[$idx]=""
 
     YAML_REPO_COUNT=$((YAML_REPO_COUNT + 1))
 }
@@ -4573,7 +4721,10 @@ _context_write_commands_file() {
         printf -- '- `revo workspace --clean` — remove workspaces whose branches are merged\n'
         printf '\n'
         printf 'Workspaces copy repo files, secrets, and local config, but skip bulky\n'
-        printf 'dependency/cache/build directories such as `node_modules`. Reinstall\n'
+        printf 'dependency/cache/build directories such as `node_modules`, root `tmp/`\n'
+        printf 'and `log/`, editor state, `*.log`, and `*.dump` (tracked files such as\n'
+        printf '`tmp/.keep` are restored). Tune this with `workspace.exclude` and per-repo\n'
+        printf '`exclude`/`include` in `revo.yaml`. Reinstall\n'
         printf 'dependencies inside the workspace when a command needs them. Run\n'
         printf '`revo` from inside `.revo/workspaces/<name>/` and it operates on the\n'
         printf 'workspace copies, not the source tree.\n'
@@ -6073,7 +6224,9 @@ _issue_create() {
 # Revo CLI - workspace / workspaces commands
 # Full-copy workspaces under .revo/workspaces/<name>/. Unlike git worktrees
 # these copy working files, secrets, and local config, but skip bulky
-# dependency/cache/build directories that can be recreated inside the workspace.
+# dependency/cache/build directories, root tmp/ and log/, editor state, and
+# local dumps that can be recreated inside the workspace. revo.yaml can extend
+# or trim the list (workspace.exclude, per-repo exclude/include).
 
 # --- helpers ---
 
@@ -6134,11 +6287,146 @@ _workspace_prune_unsafe_symlinks() {
     done < <(find "$dest" -type l 2>/dev/null)
 }
 
+# --- copy excludes ---
+#
+# Pattern syntax (shared by the defaults, workspace.exclude, and per-repo
+# exclude/include in revo.yaml), close to .gitignore:
+#   name     matches a file or directory with that name at any depth
+#   name/    trailing slash: directories only
+#   /name    leading slash (or any slash in the middle): anchored to repo root
+#   *, ?     globs within one name
+#
+# This one list feeds both the rsync path and the find-prune fallback, so the
+# two copy strategies cannot drift apart.
+WORKSPACE_DEFAULT_EXCLUDES=(
+    # dependencies and build output
+    node_modules/ .venv/ venv/ .gradle/ target/ .next/ .nuxt/ __pycache__/
+    .dart_tool/ Pods/ dist/ build/ coverage/ .cache/ .turbo/ .parcel-cache/
+    .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ .pnpm-store/
+    # scratch and logs (anchored so nested app/.../log folders survive)
+    /tmp/ /log/
+    # editor and tool state
+    .idea/ .vscode/ .ruby-lsp/ .firebase/
+    # regenerated Flutter/iOS plumbing
+    .symlinks/ ephemeral/
+    # noise and local dumps
+    .DS_Store '*.log' '*.dump' '*.tsbuildinfo'
+)
+
+# Effective patterns for the next copy. _workspace_set_excludes rebuilds this
+# per repo from revo.yaml; it starts as the defaults so callers that copy
+# without config (tests, fallbacks) still get sane behavior.
+WORKSPACE_EXCLUDES=("${WORKSPACE_DEFAULT_EXCLUDES[@]}")
+# Include entries from the last _workspace_set_excludes call that matched no
+# exclude pattern (comma-separated), so the caller can warn about them.
+WORKSPACE_UNUSED_INCLUDES=""
+
+# Strip the leading and trailing slash from a pattern for comparisons.
+_workspace_pattern_core() {
+    local core="${1#/}"
+    printf '%s' "${core%/}"
+}
+
+# Build WORKSPACE_EXCLUDES for one repo. Merge order: defaults, then
+# workspace.exclude, then the repo's exclude, minus the repo's include.
+# An include entry removes every exclude pattern with the same name, ignoring
+# leading/trailing slashes (include: [tmp] drops /tmp/).
+# Usage: _workspace_set_excludes [repo_index]
+_workspace_set_excludes() {
+    local idx="${1:-}"
+    local merged=("${WORKSPACE_DEFAULT_EXCLUDES[@]}")
+    local extra=() item
+
+    local ws_excludes="" repo_excludes="" repo_includes=""
+    ws_excludes=$(yaml_get_workspace_excludes 2>/dev/null || true)
+    if [[ -n "$idx" ]]; then
+        repo_excludes=$(yaml_get_excludes "$idx" 2>/dev/null || true)
+        repo_includes=$(yaml_get_includes "$idx" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$ws_excludes" ]]; then
+        IFS=',' read -r -a extra <<< "$ws_excludes"
+        merged+=("${extra[@]}")
+    fi
+    if [[ -n "$repo_excludes" ]]; then
+        IFS=',' read -r -a extra <<< "$repo_excludes"
+        merged+=("${extra[@]}")
+    fi
+
+    WORKSPACE_EXCLUDES=()
+    WORKSPACE_UNUSED_INCLUDES=""
+
+    local includes=()
+    if [[ -n "$repo_includes" ]]; then
+        IFS=',' read -r -a includes <<< "$repo_includes"
+    fi
+
+    local inc matched used_flags=""
+    for item in "${merged[@]}"; do
+        matched=0
+        for inc in ${includes[@]+"${includes[@]}"}; do
+            if [[ "$(_workspace_pattern_core "$item")" == "$(_workspace_pattern_core "$inc")" ]]; then
+                matched=1
+                used_flags="$used_flags,$inc,"
+            fi
+        done
+        [[ $matched -eq 1 ]] && continue
+        WORKSPACE_EXCLUDES+=("$item")
+    done
+
+    for inc in ${includes[@]+"${includes[@]}"}; do
+        if [[ "$used_flags" != *",$inc,"* ]]; then
+            if [[ -z "$WORKSPACE_UNUSED_INCLUDES" ]]; then
+                WORKSPACE_UNUSED_INCLUDES="$inc"
+            else
+                WORKSPACE_UNUSED_INCLUDES="$WORKSPACE_UNUSED_INCLUDES,$inc"
+            fi
+        fi
+    done
+
+    return 0
+}
+
+# Translate a pattern to an rsync --exclude value. rsync treats a slash in the
+# middle as "match the end of the path", so anchor those explicitly to keep
+# .gitignore-style semantics in line with the find fallback.
+_workspace_rsync_pattern() {
+    local pattern="$1"
+    local core="${pattern%/}"
+    if [[ "$core" != /* ]] && [[ "$core" == */* ]]; then
+        pattern="/$pattern"
+    fi
+    printf '%s' "$pattern"
+}
+
 _workspace_copy_repo_fallback() {
     local src="$1"
     local dest="$2"
 
     mkdir -p "$dest"
+
+    # Build: find . \( <match> -o <match> ... \) -prune -o -print
+    local find_args=()
+    local pattern core dir_only test_flag first=1
+    for pattern in ${WORKSPACE_EXCLUDES[@]+"${WORKSPACE_EXCLUDES[@]}"}; do
+        dir_only=0
+        [[ "$pattern" == */ ]] && dir_only=1
+        core="${pattern%/}"
+        if [[ "$core" == */* ]]; then
+            test_flag=-path
+            core="./${core#/}"
+        else
+            test_flag=-name
+        fi
+
+        [[ $first -eq 1 ]] || find_args+=(-o)
+        first=0
+        if [[ $dir_only -eq 1 ]]; then
+            find_args+=(\( -type d "$test_flag" "$core" \))
+        else
+            find_args+=("$test_flag" "$core")
+        fi
+    done
 
     local rel rel_path src_path dest_path
     while IFS= read -r rel; do
@@ -6156,38 +6444,68 @@ _workspace_copy_repo_fallback() {
             cp -Pp "$src_path" "$dest_path" 2>/dev/null || return 1
         fi
     done < <(
-        cd "$src" && find . \
-            \( -type d \( \
-                -name node_modules -o \
-                -name .venv -o \
-                -name venv -o \
-                -name .gradle -o \
-                -name target -o \
-                -name .next -o \
-                -name .nuxt -o \
-                -name __pycache__ -o \
-                -name .dart_tool -o \
-                -name Pods -o \
-                -name dist -o \
-                -name build -o \
-                -name coverage -o \
-                -name .cache -o \
-                -name .turbo -o \
-                -name .parcel-cache -o \
-                -name .pytest_cache -o \
-                -name .mypy_cache -o \
-                -name .ruff_cache -o \
-                -name .tox -o \
-                -name .pnpm-store \
-            \) -prune \) -o -print 2>/dev/null
+        cd "$src" || exit 1
+        if [[ ${#find_args[@]} -gt 0 ]]; then
+            find . \( "${find_args[@]}" \) -prune -o -print 2>/dev/null
+        else
+            find . 2>/dev/null
+        fi
     )
+}
+
+# Physical (symlink-resolved) path of a directory, or the input if cd fails.
+_workspace_physical_dir() {
+    local dir="$1"
+    local physical
+    if physical=$(cd "$dir" 2>/dev/null && pwd -P); then
+        printf '%s' "$physical"
+    else
+        printf '%s' "$dir"
+    fi
+}
+
+# Bring back tracked files that the exclude patterns skipped (tmp/.keep,
+# tmp/pids/.keep, log/.keep, a committed .vscode/settings.json, ...), so the
+# copy's working tree matches the source and Rails/Puma find their folders.
+# Files are copied from the source to keep any local edits; files that are
+# also missing in the source (deleted by the user) stay deleted.
+# Sets WORKSPACE_RESTORED_COUNT.
+# Usage: _workspace_restore_tracked "src" "dest"
+WORKSPACE_RESTORED_COUNT=0
+_workspace_restore_tracked() {
+    local src="$1"
+    local dest="$2"
+    WORKSPACE_RESTORED_COUNT=0
+
+    # Only act when dest is itself the top of a git repo; never fall through
+    # to a parent repository.
+    local top
+    top=$(git -C "$dest" rev-parse --show-toplevel 2>/dev/null) || return 0
+    [[ "$(_workspace_physical_dir "$top")" == "$(_workspace_physical_dir "$dest")" ]] || return 0
+
+    local rel
+    while IFS= read -r -d '' rel; do
+        [[ -z "$rel" ]] && continue
+        if [[ -e "$dest/$rel" ]] || [[ -L "$dest/$rel" ]]; then
+            continue
+        fi
+        if [[ ! -e "$src/$rel" ]] && [[ ! -L "$src/$rel" ]]; then
+            continue
+        fi
+        mkdir -p "$(dirname "$dest/$rel")" || return 1
+        cp -Pp "$src/$rel" "$dest/$rel" || return 1
+        WORKSPACE_RESTORED_COUNT=$((WORKSPACE_RESTORED_COUNT + 1))
+    done < <(git -C "$dest" ls-files -z --deleted 2>/dev/null)
+
+    return 0
 }
 
 # Copy a source repo into the workspace. If the source repo path itself is a
 # symlink, the shell expands its contents; symlinks inside the repo are
 # preserved instead of followed so workspace creation does not materialize
-# arbitrary files outside the repo. Bulky dependency/cache/build directories are
-# skipped; reinstall them inside the workspace if a command needs them.
+# arbitrary files outside the repo. Paths matching WORKSPACE_EXCLUDES are
+# skipped (reinstall dependencies inside the workspace if a command needs
+# them), then tracked files under skipped paths are restored.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -6198,31 +6516,123 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods dist build coverage .cache .turbo .parcel-cache .pytest_cache .mypy_cache .ruff_cache .tox .pnpm-store"
-
+    local copied=0
     if command -v rsync >/dev/null 2>&1; then
         local rsync_args=(-a)
-        local excluded
-        for excluded in $excludes; do
-            rsync_args+=(--exclude "$excluded/")
+        local pattern
+        for pattern in ${WORKSPACE_EXCLUDES[@]+"${WORKSPACE_EXCLUDES[@]}"}; do
+            rsync_args+=("--exclude=$(_workspace_rsync_pattern "$pattern")")
         done
 
         if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
-            _workspace_prune_unsafe_symlinks "$dest"
-            return 0
+            copied=1
+        else
+            rm -rf "$dest" 2>/dev/null
         fi
-
-        rm -rf "$dest" 2>/dev/null
     fi
 
     # Fallback for systems without rsync. Walk the tree with pruning so nested
     # generated directories are never copied just to be deleted afterward.
-    if ! _workspace_copy_repo_fallback "$src" "$dest"; then
+    if [[ $copied -eq 0 ]] && ! _workspace_copy_repo_fallback "$src" "$dest"; then
+        rm -rf "$dest" 2>/dev/null
+        return 1
+    fi
+
+    if ! _workspace_restore_tracked "$src" "$dest"; then
         rm -rf "$dest" 2>/dev/null
         return 1
     fi
 
     _workspace_prune_unsafe_symlinks "$dest"
+
+    return 0
+}
+
+# --- size report ---
+
+# Warn when a copied top-level directory is larger than this (KB).
+WORKSPACE_SIZE_WARN_KB=${WORKSPACE_SIZE_WARN_KB:-102400}
+# Populated by _workspace_measure
+WORKSPACE_SIZE_KB=0
+WORKSPACE_FILE_COUNT=0
+WORKSPACE_TOP_DIRS=""
+
+# Format a size in KB as "512 KB", "12.3 MB", "1.1 GB".
+_workspace_format_kb() {
+    local kb="$1"
+    if [[ "$kb" -lt 1024 ]]; then
+        printf '%d KB' "$kb"
+    elif [[ "$kb" -lt 1048576 ]]; then
+        local tenths=$((kb * 10 / 1024))
+        printf '%d.%d MB' $((tenths / 10)) $((tenths % 10))
+    else
+        local tenths=$((kb * 10 / 1048576))
+        printf '%d.%d GB' $((tenths / 10)) $((tenths % 10))
+    fi
+}
+
+# Measure a copied repo: total size, file count, and top-level directories
+# sorted by size (largest first, "kb<TAB>name" per line).
+# Sets WORKSPACE_SIZE_KB, WORKSPACE_FILE_COUNT, WORKSPACE_TOP_DIRS.
+_workspace_measure() {
+    local dest="$1"
+    WORKSPACE_SIZE_KB=0
+    WORKSPACE_FILE_COUNT=0
+    WORKSPACE_TOP_DIRS=""
+
+    local du_out
+    du_out=$(du -k -d 1 "$dest" 2>/dev/null) || true
+
+    local kb path dirs=""
+    while IFS=$'\t' read -r kb path; do
+        [[ -z "$kb" ]] && continue
+        if [[ "$path" == "$dest" ]]; then
+            WORKSPACE_SIZE_KB="$kb"
+        else
+            dirs="$dirs$kb"$'\t'"${path##*/}"$'\n'
+        fi
+    done <<< "$du_out"
+
+    if [[ -n "$dirs" ]]; then
+        WORKSPACE_TOP_DIRS=$(printf '%s' "$dirs" | sort -t $'\t' -k1,1 -rn)
+    fi
+
+    local count
+    count=$(find "$dest" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    WORKSPACE_FILE_COUNT="${count:-0}"
+}
+
+# Print the size report gathered by _workspace_measure, and warn about any
+# top-level directory (other than .git) above WORKSPACE_SIZE_WARN_KB, naming
+# the exclude entry that would skip it.
+# Usage: _workspace_print_size_report "repo-path"
+_workspace_print_size_report() {
+    local label="$1"
+
+    ui_info "$(ui_dim "$label: $(_workspace_format_kb "$WORKSPACE_SIZE_KB"), $WORKSPACE_FILE_COUNT files")"
+
+    [[ -z "$WORKSPACE_TOP_DIRS" ]] && return 0
+
+    local kb name top="" shown=0
+    while IFS=$'\t' read -r kb name; do
+        [[ -z "$name" ]] && continue
+        [[ $shown -ge 5 ]] && break
+        if [[ -z "$top" ]]; then
+            top="$name $(_workspace_format_kb "$kb")"
+        else
+            top="$top, $name $(_workspace_format_kb "$kb")"
+        fi
+        shown=$((shown + 1))
+    done <<< "$WORKSPACE_TOP_DIRS"
+    ui_info "$(ui_dim "  largest: $top")"
+
+    while IFS=$'\t' read -r kb name; do
+        [[ -z "$name" ]] && continue
+        [[ "$name" == ".git" ]] && continue
+        if [[ "$kb" -gt "$WORKSPACE_SIZE_WARN_KB" ]]; then
+            ui_step_error "$label/$name is $(_workspace_format_kb "$kb"). To skip it, add exclude: [/$name] to the $label entry in revo.yaml"
+        fi
+    done <<< "$WORKSPACE_TOP_DIRS"
 
     return 0
 }
@@ -6491,10 +6901,20 @@ _workspace_create() {
             continue
         fi
 
+        _workspace_set_excludes "$repo"
+        if [[ -n "$WORKSPACE_UNUSED_INCLUDES" ]]; then
+            ui_step_error "include for $path matches no exclude entry, ignored: ${WORKSPACE_UNUSED_INCLUDES//,/, }"
+        fi
+
         ui_spinner_start "Copying $path..."
         if _workspace_copy_repo "$src" "$dest"; then
+            _workspace_measure "$dest"
             ui_spinner_stop
             ui_step_done "Copied:" "$path"
+            if [[ $WORKSPACE_RESTORED_COUNT -gt 0 ]]; then
+                ui_info "$(ui_dim "$path: restored $WORKSPACE_RESTORED_COUNT tracked file(s) under excluded paths")"
+            fi
+            _workspace_print_size_report "$path"
         else
             ui_spinner_error "Failed to copy: $path"
             fail_count=$((fail_count + 1))

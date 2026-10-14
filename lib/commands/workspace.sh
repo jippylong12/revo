@@ -2,7 +2,9 @@
 # Revo CLI - workspace / workspaces commands
 # Full-copy workspaces under .revo/workspaces/<name>/. Unlike git worktrees
 # these copy working files, secrets, and local config, but skip bulky
-# dependency/cache/build directories that can be recreated inside the workspace.
+# dependency/cache/build directories, root tmp/ and log/, editor state, and
+# local dumps that can be recreated inside the workspace. revo.yaml can extend
+# or trim the list (workspace.exclude, per-repo exclude/include).
 
 # --- helpers ---
 
@@ -63,11 +65,146 @@ _workspace_prune_unsafe_symlinks() {
     done < <(find "$dest" -type l 2>/dev/null)
 }
 
+# --- copy excludes ---
+#
+# Pattern syntax (shared by the defaults, workspace.exclude, and per-repo
+# exclude/include in revo.yaml), close to .gitignore:
+#   name     matches a file or directory with that name at any depth
+#   name/    trailing slash: directories only
+#   /name    leading slash (or any slash in the middle): anchored to repo root
+#   *, ?     globs within one name
+#
+# This one list feeds both the rsync path and the find-prune fallback, so the
+# two copy strategies cannot drift apart.
+WORKSPACE_DEFAULT_EXCLUDES=(
+    # dependencies and build output
+    node_modules/ .venv/ venv/ .gradle/ target/ .next/ .nuxt/ __pycache__/
+    .dart_tool/ Pods/ dist/ build/ coverage/ .cache/ .turbo/ .parcel-cache/
+    .pytest_cache/ .mypy_cache/ .ruff_cache/ .tox/ .pnpm-store/
+    # scratch and logs (anchored so nested app/.../log folders survive)
+    /tmp/ /log/
+    # editor and tool state
+    .idea/ .vscode/ .ruby-lsp/ .firebase/
+    # regenerated Flutter/iOS plumbing
+    .symlinks/ ephemeral/
+    # noise and local dumps
+    .DS_Store '*.log' '*.dump' '*.tsbuildinfo'
+)
+
+# Effective patterns for the next copy. _workspace_set_excludes rebuilds this
+# per repo from revo.yaml; it starts as the defaults so callers that copy
+# without config (tests, fallbacks) still get sane behavior.
+WORKSPACE_EXCLUDES=("${WORKSPACE_DEFAULT_EXCLUDES[@]}")
+# Include entries from the last _workspace_set_excludes call that matched no
+# exclude pattern (comma-separated), so the caller can warn about them.
+WORKSPACE_UNUSED_INCLUDES=""
+
+# Strip the leading and trailing slash from a pattern for comparisons.
+_workspace_pattern_core() {
+    local core="${1#/}"
+    printf '%s' "${core%/}"
+}
+
+# Build WORKSPACE_EXCLUDES for one repo. Merge order: defaults, then
+# workspace.exclude, then the repo's exclude, minus the repo's include.
+# An include entry removes every exclude pattern with the same name, ignoring
+# leading/trailing slashes (include: [tmp] drops /tmp/).
+# Usage: _workspace_set_excludes [repo_index]
+_workspace_set_excludes() {
+    local idx="${1:-}"
+    local merged=("${WORKSPACE_DEFAULT_EXCLUDES[@]}")
+    local extra=() item
+
+    local ws_excludes="" repo_excludes="" repo_includes=""
+    ws_excludes=$(yaml_get_workspace_excludes 2>/dev/null || true)
+    if [[ -n "$idx" ]]; then
+        repo_excludes=$(yaml_get_excludes "$idx" 2>/dev/null || true)
+        repo_includes=$(yaml_get_includes "$idx" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$ws_excludes" ]]; then
+        IFS=',' read -r -a extra <<< "$ws_excludes"
+        merged+=("${extra[@]}")
+    fi
+    if [[ -n "$repo_excludes" ]]; then
+        IFS=',' read -r -a extra <<< "$repo_excludes"
+        merged+=("${extra[@]}")
+    fi
+
+    WORKSPACE_EXCLUDES=()
+    WORKSPACE_UNUSED_INCLUDES=""
+
+    local includes=()
+    if [[ -n "$repo_includes" ]]; then
+        IFS=',' read -r -a includes <<< "$repo_includes"
+    fi
+
+    local inc matched used_flags=""
+    for item in "${merged[@]}"; do
+        matched=0
+        for inc in ${includes[@]+"${includes[@]}"}; do
+            if [[ "$(_workspace_pattern_core "$item")" == "$(_workspace_pattern_core "$inc")" ]]; then
+                matched=1
+                used_flags="$used_flags,$inc,"
+            fi
+        done
+        [[ $matched -eq 1 ]] && continue
+        WORKSPACE_EXCLUDES+=("$item")
+    done
+
+    for inc in ${includes[@]+"${includes[@]}"}; do
+        if [[ "$used_flags" != *",$inc,"* ]]; then
+            if [[ -z "$WORKSPACE_UNUSED_INCLUDES" ]]; then
+                WORKSPACE_UNUSED_INCLUDES="$inc"
+            else
+                WORKSPACE_UNUSED_INCLUDES="$WORKSPACE_UNUSED_INCLUDES,$inc"
+            fi
+        fi
+    done
+
+    return 0
+}
+
+# Translate a pattern to an rsync --exclude value. rsync treats a slash in the
+# middle as "match the end of the path", so anchor those explicitly to keep
+# .gitignore-style semantics in line with the find fallback.
+_workspace_rsync_pattern() {
+    local pattern="$1"
+    local core="${pattern%/}"
+    if [[ "$core" != /* ]] && [[ "$core" == */* ]]; then
+        pattern="/$pattern"
+    fi
+    printf '%s' "$pattern"
+}
+
 _workspace_copy_repo_fallback() {
     local src="$1"
     local dest="$2"
 
     mkdir -p "$dest"
+
+    # Build: find . \( <match> -o <match> ... \) -prune -o -print
+    local find_args=()
+    local pattern core dir_only test_flag first=1
+    for pattern in ${WORKSPACE_EXCLUDES[@]+"${WORKSPACE_EXCLUDES[@]}"}; do
+        dir_only=0
+        [[ "$pattern" == */ ]] && dir_only=1
+        core="${pattern%/}"
+        if [[ "$core" == */* ]]; then
+            test_flag=-path
+            core="./${core#/}"
+        else
+            test_flag=-name
+        fi
+
+        [[ $first -eq 1 ]] || find_args+=(-o)
+        first=0
+        if [[ $dir_only -eq 1 ]]; then
+            find_args+=(\( -type d "$test_flag" "$core" \))
+        else
+            find_args+=("$test_flag" "$core")
+        fi
+    done
 
     local rel rel_path src_path dest_path
     while IFS= read -r rel; do
@@ -85,38 +222,68 @@ _workspace_copy_repo_fallback() {
             cp -Pp "$src_path" "$dest_path" 2>/dev/null || return 1
         fi
     done < <(
-        cd "$src" && find . \
-            \( -type d \( \
-                -name node_modules -o \
-                -name .venv -o \
-                -name venv -o \
-                -name .gradle -o \
-                -name target -o \
-                -name .next -o \
-                -name .nuxt -o \
-                -name __pycache__ -o \
-                -name .dart_tool -o \
-                -name Pods -o \
-                -name dist -o \
-                -name build -o \
-                -name coverage -o \
-                -name .cache -o \
-                -name .turbo -o \
-                -name .parcel-cache -o \
-                -name .pytest_cache -o \
-                -name .mypy_cache -o \
-                -name .ruff_cache -o \
-                -name .tox -o \
-                -name .pnpm-store \
-            \) -prune \) -o -print 2>/dev/null
+        cd "$src" || exit 1
+        if [[ ${#find_args[@]} -gt 0 ]]; then
+            find . \( "${find_args[@]}" \) -prune -o -print 2>/dev/null
+        else
+            find . 2>/dev/null
+        fi
     )
+}
+
+# Physical (symlink-resolved) path of a directory, or the input if cd fails.
+_workspace_physical_dir() {
+    local dir="$1"
+    local physical
+    if physical=$(cd "$dir" 2>/dev/null && pwd -P); then
+        printf '%s' "$physical"
+    else
+        printf '%s' "$dir"
+    fi
+}
+
+# Bring back tracked files that the exclude patterns skipped (tmp/.keep,
+# tmp/pids/.keep, log/.keep, a committed .vscode/settings.json, ...), so the
+# copy's working tree matches the source and Rails/Puma find their folders.
+# Files are copied from the source to keep any local edits; files that are
+# also missing in the source (deleted by the user) stay deleted.
+# Sets WORKSPACE_RESTORED_COUNT.
+# Usage: _workspace_restore_tracked "src" "dest"
+WORKSPACE_RESTORED_COUNT=0
+_workspace_restore_tracked() {
+    local src="$1"
+    local dest="$2"
+    WORKSPACE_RESTORED_COUNT=0
+
+    # Only act when dest is itself the top of a git repo; never fall through
+    # to a parent repository.
+    local top
+    top=$(git -C "$dest" rev-parse --show-toplevel 2>/dev/null) || return 0
+    [[ "$(_workspace_physical_dir "$top")" == "$(_workspace_physical_dir "$dest")" ]] || return 0
+
+    local rel
+    while IFS= read -r -d '' rel; do
+        [[ -z "$rel" ]] && continue
+        if [[ -e "$dest/$rel" ]] || [[ -L "$dest/$rel" ]]; then
+            continue
+        fi
+        if [[ ! -e "$src/$rel" ]] && [[ ! -L "$src/$rel" ]]; then
+            continue
+        fi
+        mkdir -p "$(dirname "$dest/$rel")" || return 1
+        cp -Pp "$src/$rel" "$dest/$rel" || return 1
+        WORKSPACE_RESTORED_COUNT=$((WORKSPACE_RESTORED_COUNT + 1))
+    done < <(git -C "$dest" ls-files -z --deleted 2>/dev/null)
+
+    return 0
 }
 
 # Copy a source repo into the workspace. If the source repo path itself is a
 # symlink, the shell expands its contents; symlinks inside the repo are
 # preserved instead of followed so workspace creation does not materialize
-# arbitrary files outside the repo. Bulky dependency/cache/build directories are
-# skipped; reinstall them inside the workspace if a command needs them.
+# arbitrary files outside the repo. Paths matching WORKSPACE_EXCLUDES are
+# skipped (reinstall dependencies inside the workspace if a command needs
+# them), then tracked files under skipped paths are restored.
 # Usage: _workspace_copy_repo "src" "dest"
 # Returns: 0 on success
 _workspace_copy_repo() {
@@ -127,31 +294,123 @@ _workspace_copy_repo() {
     mkdir -p "$(dirname "$dest")"
     rm -rf "$dest" 2>/dev/null
 
-    local excludes="node_modules .venv venv .gradle target .next .nuxt __pycache__ .dart_tool Pods dist build coverage .cache .turbo .parcel-cache .pytest_cache .mypy_cache .ruff_cache .tox .pnpm-store"
-
+    local copied=0
     if command -v rsync >/dev/null 2>&1; then
         local rsync_args=(-a)
-        local excluded
-        for excluded in $excludes; do
-            rsync_args+=(--exclude "$excluded/")
+        local pattern
+        for pattern in ${WORKSPACE_EXCLUDES[@]+"${WORKSPACE_EXCLUDES[@]}"}; do
+            rsync_args+=("--exclude=$(_workspace_rsync_pattern "$pattern")")
         done
 
         if rsync "${rsync_args[@]}" "$src/" "$dest/" >/dev/null 2>&1; then
-            _workspace_prune_unsafe_symlinks "$dest"
-            return 0
+            copied=1
+        else
+            rm -rf "$dest" 2>/dev/null
         fi
-
-        rm -rf "$dest" 2>/dev/null
     fi
 
     # Fallback for systems without rsync. Walk the tree with pruning so nested
     # generated directories are never copied just to be deleted afterward.
-    if ! _workspace_copy_repo_fallback "$src" "$dest"; then
+    if [[ $copied -eq 0 ]] && ! _workspace_copy_repo_fallback "$src" "$dest"; then
+        rm -rf "$dest" 2>/dev/null
+        return 1
+    fi
+
+    if ! _workspace_restore_tracked "$src" "$dest"; then
         rm -rf "$dest" 2>/dev/null
         return 1
     fi
 
     _workspace_prune_unsafe_symlinks "$dest"
+
+    return 0
+}
+
+# --- size report ---
+
+# Warn when a copied top-level directory is larger than this (KB).
+WORKSPACE_SIZE_WARN_KB=${WORKSPACE_SIZE_WARN_KB:-102400}
+# Populated by _workspace_measure
+WORKSPACE_SIZE_KB=0
+WORKSPACE_FILE_COUNT=0
+WORKSPACE_TOP_DIRS=""
+
+# Format a size in KB as "512 KB", "12.3 MB", "1.1 GB".
+_workspace_format_kb() {
+    local kb="$1"
+    if [[ "$kb" -lt 1024 ]]; then
+        printf '%d KB' "$kb"
+    elif [[ "$kb" -lt 1048576 ]]; then
+        local tenths=$((kb * 10 / 1024))
+        printf '%d.%d MB' $((tenths / 10)) $((tenths % 10))
+    else
+        local tenths=$((kb * 10 / 1048576))
+        printf '%d.%d GB' $((tenths / 10)) $((tenths % 10))
+    fi
+}
+
+# Measure a copied repo: total size, file count, and top-level directories
+# sorted by size (largest first, "kb<TAB>name" per line).
+# Sets WORKSPACE_SIZE_KB, WORKSPACE_FILE_COUNT, WORKSPACE_TOP_DIRS.
+_workspace_measure() {
+    local dest="$1"
+    WORKSPACE_SIZE_KB=0
+    WORKSPACE_FILE_COUNT=0
+    WORKSPACE_TOP_DIRS=""
+
+    local du_out
+    du_out=$(du -k -d 1 "$dest" 2>/dev/null) || true
+
+    local kb path dirs=""
+    while IFS=$'\t' read -r kb path; do
+        [[ -z "$kb" ]] && continue
+        if [[ "$path" == "$dest" ]]; then
+            WORKSPACE_SIZE_KB="$kb"
+        else
+            dirs="$dirs$kb"$'\t'"${path##*/}"$'\n'
+        fi
+    done <<< "$du_out"
+
+    if [[ -n "$dirs" ]]; then
+        WORKSPACE_TOP_DIRS=$(printf '%s' "$dirs" | sort -t $'\t' -k1,1 -rn)
+    fi
+
+    local count
+    count=$(find "$dest" -type f 2>/dev/null | wc -l | tr -d '[:space:]')
+    WORKSPACE_FILE_COUNT="${count:-0}"
+}
+
+# Print the size report gathered by _workspace_measure, and warn about any
+# top-level directory (other than .git) above WORKSPACE_SIZE_WARN_KB, naming
+# the exclude entry that would skip it.
+# Usage: _workspace_print_size_report "repo-path"
+_workspace_print_size_report() {
+    local label="$1"
+
+    ui_info "$(ui_dim "$label: $(_workspace_format_kb "$WORKSPACE_SIZE_KB"), $WORKSPACE_FILE_COUNT files")"
+
+    [[ -z "$WORKSPACE_TOP_DIRS" ]] && return 0
+
+    local kb name top="" shown=0
+    while IFS=$'\t' read -r kb name; do
+        [[ -z "$name" ]] && continue
+        [[ $shown -ge 5 ]] && break
+        if [[ -z "$top" ]]; then
+            top="$name $(_workspace_format_kb "$kb")"
+        else
+            top="$top, $name $(_workspace_format_kb "$kb")"
+        fi
+        shown=$((shown + 1))
+    done <<< "$WORKSPACE_TOP_DIRS"
+    ui_info "$(ui_dim "  largest: $top")"
+
+    while IFS=$'\t' read -r kb name; do
+        [[ -z "$name" ]] && continue
+        [[ "$name" == ".git" ]] && continue
+        if [[ "$kb" -gt "$WORKSPACE_SIZE_WARN_KB" ]]; then
+            ui_step_error "$label/$name is $(_workspace_format_kb "$kb"). To skip it, add exclude: [/$name] to the $label entry in revo.yaml"
+        fi
+    done <<< "$WORKSPACE_TOP_DIRS"
 
     return 0
 }
@@ -420,10 +679,20 @@ _workspace_create() {
             continue
         fi
 
+        _workspace_set_excludes "$repo"
+        if [[ -n "$WORKSPACE_UNUSED_INCLUDES" ]]; then
+            ui_step_error "include for $path matches no exclude entry, ignored: ${WORKSPACE_UNUSED_INCLUDES//,/, }"
+        fi
+
         ui_spinner_start "Copying $path..."
         if _workspace_copy_repo "$src" "$dest"; then
+            _workspace_measure "$dest"
             ui_spinner_stop
             ui_step_done "Copied:" "$path"
+            if [[ $WORKSPACE_RESTORED_COUNT -gt 0 ]]; then
+                ui_info "$(ui_dim "$path: restored $WORKSPACE_RESTORED_COUNT tracked file(s) under excluded paths")"
+            fi
+            _workspace_print_size_report "$path"
         else
             ui_spinner_error "Failed to copy: $path"
             fail_count=$((fail_count + 1))
