@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [2.1.1] - 2026-10-19
 
 ### Fixed
 - `revo detect` now runs its own command. It was routed through `revo init`,
