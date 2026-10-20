@@ -259,26 +259,3 @@ _db_drop() {
             ;;
     esac
 }
-
-# Check if a database exists
-# Returns 0 if exists, 1 if not
-_db_exists() {
-    local db_type="$1"
-    local db_name="$2"
-
-    _db_check_tool "$db_type" || return 1
-
-    case "$db_type" in
-        postgres)
-            psql -lqt </dev/null 2>/dev/null | cut -d '|' -f 1 | grep -qw "$db_name"
-            ;;
-        mongodb)
-            local mongo_cmd="mongosh"
-            command -v mongosh >/dev/null 2>&1 || mongo_cmd="mongo"
-            $mongo_cmd --quiet --eval "db.getMongo().getDBNames()" </dev/null 2>/dev/null | grep -qw "$db_name"
-            ;;
-        mysql)
-            mysqlshow "$db_name" </dev/null >/dev/null 2>&1
-            ;;
-    esac
-}

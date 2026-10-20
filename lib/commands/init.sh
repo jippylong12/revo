@@ -180,26 +180,79 @@ _init_write_agent_files() {
     IFS="$old_ifs"
 }
 
-cmd_init() {
-    local workspace_name=""
-    local _orig_command="init"
+# Register every git repo found by _init_scan_existing in the in-memory
+# config: derive tags, default branch, and database settings, and symlink
+# root-level repos into repos/. Does not save; callers run config_save.
+# Sets _INIT_DETECTED_COUNT. Shared by `revo init` and `revo detect`.
+_INIT_DETECTED_COUNT=0
+_init_detect_repos() {
+    _INIT_DETECTED_COUNT=0
+    _init_scan_existing
+    [[ -z "$_INIT_FOUND_DIRS" ]] && return 0
 
-    # Parse internal --_command flag (set by dispatcher to distinguish
-    # revo init / revo context / revo detect)
-    if [[ "${1:-}" == "--_command" ]]; then
-        _orig_command="${2:-init}"
-        shift 2
-    fi
-
-    # Already initialized? Route based on original command.
-    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        # revo context / revo detect — just regenerate
-        if [[ "$_orig_command" != "init" ]]; then
-            cmd_context "$@"
-            return $?
+    local dir name remote tags branch
+    while IFS= read -r dir; do
+        [[ -z "$dir" ]] && continue
+        name=$(basename "$dir")
+        remote=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+        if [[ -z "$remote" ]]; then
+            ui_step_error "Skipping $name (no git remote)"
+            continue
         fi
 
-        # revo init — list repos and prompt Claude to set descriptions
+        # If the repo lives at the workspace root (not under repos/),
+        # link it into repos/ so the rest of revo's data model — which
+        # always resolves $REVO_REPOS_DIR/$path — works without copying
+        # or moving files.
+        if [[ "$dir" != repos/* ]] && [[ ! -e "repos/$name" ]]; then
+            ln -s "../$name" "repos/$name"
+        fi
+
+        tags=$(_init_auto_tags "$dir" "$name")
+        branch=$(git_default_branch "$dir")
+
+        # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
+        scan_reset
+        scan_repo "$dir"
+
+        yaml_add_repo "$remote" "$name" "$tags" "" "$branch" \
+            "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
+
+        ui_step_done "Detected:" "$name → $remote (branch: $branch)"
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            if [[ -n "$SCAN_DB_NAME" ]]; then
+                ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
+            else
+                ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
+            fi
+        fi
+        _INIT_DETECTED_COUNT=$((_INIT_DETECTED_COUNT + 1))
+    done <<< "$_INIT_FOUND_DIRS"
+
+    return 0
+}
+
+cmd_init() {
+    local workspace_name=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                printf 'Usage: revo init\n\n'
+                printf 'Initialize a workspace in the current directory. Existing git repos\n'
+                printf 'here and under repos/ are added to revo.yaml automatically.\n'
+                printf 'In an initialized workspace, lists repos and the next steps.\n'
+                return 0
+                ;;
+            *)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    # Already initialized — list repos and prompt the agent to set descriptions
+    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
         config_require_workspace || return 1
 
         ui_intro "Revo - Workspace Setup"
@@ -260,57 +313,11 @@ cmd_init() {
     ui_step_done "Created repos/ directory"
 
     # Auto-detect existing git repos in the current directory.
-    _init_scan_existing
-    local detected_count=0
-    if [[ -n "$_INIT_FOUND_DIRS" ]]; then
-        local dir name remote tags path
-        while IFS= read -r dir; do
-            [[ -z "$dir" ]] && continue
-            name=$(basename "$dir")
-            remote=$(cd "$dir" && git remote get-url origin 2>/dev/null || true)
-            if [[ -z "$remote" ]]; then
-                ui_step_error "Skipping $name (no git remote)"
-                continue
-            fi
-
-            path="$name"
-
-            # If the repo lives at the workspace root (not under repos/),
-            # link it into repos/ so the rest of revo's data model — which
-            # always resolves $REVO_REPOS_DIR/$path — works without copying
-            # or moving files.
-            if [[ "$dir" != repos/* ]]; then
-                if [[ ! -e "repos/$name" ]]; then
-                    ln -s "../$name" "repos/$name"
-                fi
-            fi
-
-            tags=$(_init_auto_tags "$dir" "$name")
-            local branch
-            branch=$(git_default_branch "$dir")
-
-            # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
-            scan_reset
-            scan_repo "$dir"
-
-            yaml_add_repo "$remote" "$path" "$tags" "" "$branch" \
-                "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
-
-            ui_step_done "Detected:" "$name → $remote (branch: $branch)"
-            if [[ -n "$SCAN_DB_TYPE" ]]; then
-                if [[ -n "$SCAN_DB_NAME" ]]; then
-                    ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
-                else
-                    ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
-                fi
-            fi
-            detected_count=$((detected_count + 1))
-        done <<< "$_INIT_FOUND_DIRS"
-
-        if [[ $detected_count -gt 0 ]]; then
-            config_save
-            ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
-        fi
+    _init_detect_repos
+    local detected_count=$_INIT_DETECTED_COUNT
+    if [[ $detected_count -gt 0 ]]; then
+        config_save
+        ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
     fi
 
     # If we detected repos, write basic agent files and prompt the agent to

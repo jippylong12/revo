@@ -53,13 +53,7 @@ _scan_json_string() {
     printf '%s' "$line"
 }
 
-# Returns 0 if the package.json has "dep_name" anywhere in a dependencies block
-_scan_pkg_has_dep() {
-    local file="$1"
-    local dep="$2"
-    grep -qF "\"$dep\"" "$file" 2>/dev/null
-}
-
+# Returns 0 if the flattened package.json text mentions "dep_name"
 _scan_text_has_dep() {
     local text="$1"
     local dep="$2"

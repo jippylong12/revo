@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Revo CLI - detect command
 # Bootstraps a workspace around git repos that already exist in the current
-# directory. Use this when you have a parent folder full of clones and want
-# revo to wrap them without re-cloning.
+# directory (and under repos/) without prompting: the workspace is named after
+# the directory, repos are registered with the same auto-detection `revo init`
+# uses, and the agent files are generated immediately.
 
 cmd_detect() {
     while [[ $# -gt 0 ]]; do
@@ -10,8 +11,8 @@ cmd_detect() {
             --help|-h)
                 printf 'Usage: revo detect\n\n'
                 printf 'Auto-detect git repositories in the current directory and\n'
-                printf 'bootstrap a revo workspace around them. Generates revo.yaml\n'
-                printf 'and configured agent files from what it finds.\n'
+                printf 'bootstrap a revo workspace around them without prompts.\n'
+                printf 'Generates revo.yaml and the configured agent files.\n'
                 return 0
                 ;;
             *)
@@ -27,7 +28,6 @@ cmd_detect() {
     fi
 
     ui_intro "Revo - Detect Existing Repositories"
-    ui_step "Scanning for git repos..."
 
     # Initialize the workspace using the cwd basename. This sets
     # REVO_WORKSPACE_ROOT/REVO_CONFIG_FILE/REVO_REPOS_DIR and writes an empty
@@ -39,96 +39,19 @@ cmd_detect() {
         return 1
     fi
 
-    local found=0
-    local d name remote category tags
+    _init_detect_repos
 
-    for d in */; do
-        d="${d%/}"
-        [[ "$d" == "repos" ]] && continue
-        [[ "$d" == ".revo" ]] && continue
-        [[ -d "$d/.git" ]] || continue
-
-        name="$d"
-        remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
-
-        # Auto-categorize from package contents.
-        category=""
-        if [[ -f "$d/package.json" ]]; then
-            local pkg_text
-            pkg_text=$(tr '\n' ' ' < "$d/package.json" 2>/dev/null || true)
-            if _scan_text_has_dep "$pkg_text" "next" || _scan_text_has_dep "$pkg_text" "nuxt" \
-                || _scan_text_has_dep "$pkg_text" "react" || _scan_text_has_dep "$pkg_text" "vue" \
-                || _scan_text_has_dep "$pkg_text" "svelte" || _scan_text_has_dep "$pkg_text" "@angular/core" \
-                || _scan_text_has_dep "$pkg_text" "astro" || _scan_text_has_dep "$pkg_text" "@remix-run/react" \
-                || _scan_text_has_dep "$pkg_text" "@sveltejs/kit" || _scan_text_has_dep "$pkg_text" "expo" \
-                || _scan_text_has_dep "$pkg_text" "react-native"; then
-                category="frontend"
-            elif _scan_text_has_dep "$pkg_text" "express" || _scan_text_has_dep "$pkg_text" "fastify" \
-                || _scan_text_has_dep "$pkg_text" "hono" || _scan_text_has_dep "$pkg_text" "@nestjs/core" \
-                || _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "koa"; then
-                category="backend"
-            fi
-        elif [[ -f "$d/go.mod" ]] || [[ -f "$d/Cargo.toml" ]] || [[ -f "$d/pom.xml" ]] || [[ -f "$d/build.gradle" ]] || [[ -f "$d/build.gradle.kts" ]]; then
-            category="backend"
-        elif [[ -f "$d/pyproject.toml" ]] || [[ -f "$d/requirements.txt" ]]; then
-            category="backend"
-        fi
-
-        if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
-            tags="$name, $category"
-        else
-            tags="$name"
-        fi
-
-        # Link the root-level repo into repos/ so the rest of revo's data
-        # model (which always resolves $REVO_REPOS_DIR/$path) works.
-        if [[ ! -e "repos/$name" ]]; then
-            ln -s "../$name" "repos/$name"
-        fi
-
-        local branch
-        branch=$(git_default_branch "$d")
-        yaml_add_repo "$remote" "$name" "$tags" "" "$branch"
-        ui_step_done "Found:" "$name ($remote, branch: $branch)"
-        found=$((found + 1))
-    done
-
-    if [[ -d "repos" ]]; then
-        for d in repos/*/; do
-            d="${d%/}"
-            [[ -d "$d/.git" ]] || continue
-            name=$(basename "$d")
-            # Skip repos already added via symlink in the loop above.
-            local already=0
-            local i
-            for ((i = 0; i < YAML_REPO_COUNT; i++)); do
-                if [[ "$(yaml_get_path "$i")" == "$name" ]]; then
-                    already=1
-                    break
-                fi
-            done
-            [[ $already -eq 1 ]] && continue
-            remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
-            local branch
-            branch=$(git_default_branch "$d")
-            yaml_add_repo "$remote" "$name" "$name" "" "$branch"
-            ui_step_done "Found:" "$name ($remote, branch: $branch)"
-            found=$((found + 1))
-        done
-    fi
-
-    if [[ $found -eq 0 ]]; then
+    if [[ $_INIT_DETECTED_COUNT -eq 0 ]]; then
         rm -f "$REVO_CONFIG_FILE"
-        ui_step_error "No git repos found in current directory. Use 'revo init' instead."
+        ui_step_error "No git repos with a remote found here. Use 'revo init' instead."
         ui_outro_cancel "Nothing to detect"
         return 1
     fi
 
     config_save
-    ui_step_done "Detected $found repository(ies)"
+    ui_step_done "Detected:" "$_INIT_DETECTED_COUNT repository(ies)"
     ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
     ui_bar_line
 
-    cmd_context
-    return 0
+    cmd_context --auto
 }

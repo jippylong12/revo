@@ -64,6 +64,15 @@ cmd_add() {
         return 1
     fi
 
+    # The URL is written unquoted to revo.yaml and handed to git clone.
+    # Whitespace or '#' would be cut off on re-parse; a leading '-' looks
+    # like a git option.
+    if [[ "$url" == -* ]] || [[ "$url" =~ [[:space:][:cntrl:]\#] ]]; then
+        ui_step_error "Invalid repository URL: $url"
+        ui_info "$(ui_dim "URLs must not start with '-' or contain spaces or '#'.")"
+        return 1
+    fi
+
     config_require_workspace || return 1
 
     # Derive path from URL if not provided

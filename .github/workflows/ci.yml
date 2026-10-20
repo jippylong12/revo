@@ -21,5 +21,20 @@ jobs:
       - name: Run config tests
         run: bash test/test_config.sh
 
+      - name: Run scan tests
+        run: bash test/test_scan.sh
+
+      - name: Run database tests
+        run: bash test/test_db.sh
+
+      - name: Run workspace tests
+        run: bash test/test_workspace.sh
+
       - name: Run integration tests
         run: bash test/test_integration.sh
+
+      - name: Verify dist/revo is up to date
+        run: |
+          ./build.sh
+          git diff --exit-code -- dist/revo \
+            || { echo "::error::dist/revo is stale. Run ./build.sh and commit the result."; exit 1; }

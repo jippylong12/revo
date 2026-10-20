@@ -21,35 +21,23 @@ if [[ "$UI_UNICODE" -eq 1 ]]; then
     S_STEP_ACTIVE="◆"
     S_STEP_DONE="◇"
     S_STEP_ERROR="▲"
-    S_STEP_CANCEL="■"
     S_BAR="│"
     S_BAR_START="┌"
     S_BAR_END="└"
     S_SPINNER_FRAMES=("◒" "◐" "◓" "◑")
-    S_CHECKBOX_ON="◼"
-    S_CHECKBOX_OFF="◻"
-    S_RADIO_ON="●"
-    S_RADIO_OFF="○"
+    S_TABLE_RULE="─"
 else
     S_STEP_ACTIVE="*"
     S_STEP_DONE="+"
     S_STEP_ERROR="!"
-    S_STEP_CANCEL="x"
     S_BAR="|"
     S_BAR_START="/"
     S_BAR_END="\\"
     S_SPINNER_FRAMES=("-" "\\" "|" "/")
-    S_CHECKBOX_ON="[x]"
-    S_CHECKBOX_OFF="[ ]"
-    S_RADIO_ON="(*)"
-    S_RADIO_OFF="( )"
+    S_TABLE_RULE="-"
 fi
 
 # --- Colors ---
-ui_reset() {
-    [[ "$UI_COLOR" -eq 1 ]] && printf '\033[0m' || true
-}
-
 ui_cyan() {
     [[ "$UI_COLOR" -eq 1 ]] && printf '\033[36m%s\033[0m' "$1" || printf '%s' "$1"
 }
@@ -137,12 +125,6 @@ ui_step_error() {
     printf '%s  %s\n' "$(ui_yellow "$S_STEP_ERROR")" "$(ui_yellow "$message")"
 }
 
-# Step cancel
-ui_step_cancel() {
-    local message="$1"
-    printf '%s  %s\n' "$(ui_red "$S_STEP_CANCEL")" "$(ui_red "$message")"
-}
-
 # Info line (continuation)
 ui_info() {
     local message="$1"
@@ -152,119 +134,6 @@ ui_info() {
 # Empty bar line
 ui_bar_line() {
     printf '%s\n' "$(ui_bar)"
-}
-
-# --- Interactive Components ---
-
-# Text input
-# Usage: result=$(ui_text "Prompt" "default")
-# Returns: user input or default
-ui_text() {
-    local prompt="$1"
-    local default="${2:-}"
-    local input
-
-    ui_step "$prompt"
-    if [[ -n "$default" ]]; then
-        printf '%s  ' "$(ui_bar)"
-        read -r -p "" -e -i "$default" input
-    else
-        printf '%s  ' "$(ui_bar)"
-        read -r input
-    fi
-
-    # Return default if empty
-    if [[ -z "$input" ]]; then
-        input="$default"
-    fi
-
-    printf '%s' "$input"
-}
-
-# Confirm (y/n)
-# Usage: if ui_confirm "Question?"; then ... fi
-ui_confirm() {
-    local prompt="$1"
-    local default="${2:-y}"
-    local hint
-    local response
-
-    if [[ "$default" == "y" ]]; then
-        hint="Y/n"
-    else
-        hint="y/N"
-    fi
-
-    ui_step "$prompt ($hint)"
-    printf '%s  ' "$(ui_bar)"
-    read -r -n 1 response
-    printf '\n'
-
-    # Handle empty (use default)
-    if [[ -z "$response" ]]; then
-        response="$default"
-    fi
-
-    [[ "$response" =~ ^[Yy]$ ]]
-}
-
-# Select from options
-# Usage: result=$(ui_select "Prompt" "opt1" "opt2" "opt3")
-# Returns: selected option
-ui_select() {
-    local prompt="$1"
-    shift
-    local options=("$@")
-    local selected=0
-    local count=${#options[@]}
-    local key
-
-    ui_step "$prompt"
-
-    # Save cursor position and hide cursor
-    printf '\033[?25l'
-
-    while true; do
-        # Draw options
-        for i in "${!options[@]}"; do
-            if [[ $i -eq $selected ]]; then
-                printf '%s  %s %s\n' "$(ui_bar)" "$(ui_cyan "$S_RADIO_ON")" "${options[$i]}"
-            else
-                printf '%s  %s %s\n' "$(ui_bar)" "$(ui_dim "$S_RADIO_OFF")" "$(ui_dim "${options[$i]}")"
-            fi
-        done
-
-        # Read key
-        read -rsn1 key
-
-        # Handle arrow keys (escape sequences)
-        if [[ "$key" == $'\033' ]]; then
-            read -rsn2 key
-            case "$key" in
-                '[A') # Up
-                    ((selected > 0)) && ((selected--))
-                    ;;
-                '[B') # Down
-                    ((selected < count - 1)) && selected=$((selected + 1))
-                    ;;
-            esac
-        elif [[ "$key" == "" ]]; then
-            # Enter pressed
-            break
-        elif [[ "$key" == "j" ]]; then
-            ((selected < count - 1)) && selected=$((selected + 1))
-        elif [[ "$key" == "k" ]]; then
-            ((selected > 0)) && ((selected--))
-        fi
-
-        # Move cursor up to redraw
-        printf '\033[%dA' "$count"
-    done
-
-    # Show cursor
-    printf '\033[?25h'
-
-    printf '%s' "${options[$selected]}"
 }
 
 # --- Spinner ---
@@ -295,9 +164,6 @@ ui_spinner_start() {
         done
     ) &
     _SPINNER_PID=$!
-
-    # Ensure cleanup on script exit
-    trap 'ui_spinner_stop 2>/dev/null' EXIT
 }
 
 ui_spinner_stop() {
@@ -404,7 +270,7 @@ ui_table_header() {
         local dashes=""
         local j=0
         while [[ $j -lt $w ]]; do
-            dashes+="─"
+            dashes+="$S_TABLE_RULE"
             j=$((j + 1))
         done
         printf '%s' "$(ui_dim "$dashes")"
@@ -426,26 +292,7 @@ ui_table_row() {
     printf '\n'
 }
 
-# --- Utilities ---
-
-# Clear line
-ui_clear_line() {
-    [[ -t 1 ]] || return 0
-    printf '\r\033[K'
-}
-
-# Move cursor up N lines
-ui_cursor_up() {
-    [[ -t 1 ]] || return 0
-    local n="${1:-1}"
-    printf '\033[%dA' "$n"
-}
-
-# Hide cursor
-ui_cursor_hide() {
-    [[ -t 1 ]] || return 0
-    printf '\033[?25l'
-}
+# --- Exit cleanup ---
 
 # Show cursor
 ui_cursor_show() {
@@ -453,5 +300,14 @@ ui_cursor_show() {
     printf '\033[?25h'
 }
 
-# Ensure cursor is shown on exit
-trap 'ui_cursor_show' EXIT
+# Kill a running spinner and restore the cursor when the script exits for
+# any reason. One trap for both so neither registration clobbers the other.
+_ui_exit_cleanup() {
+    if [[ -n "${_SPINNER_PID:-}" ]] && kill -0 "$_SPINNER_PID" 2>/dev/null; then
+        kill "$_SPINNER_PID" 2>/dev/null
+        wait "$_SPINNER_PID" 2>/dev/null || true
+        [[ -t 1 ]] && printf '\r\033[K'
+    fi
+    ui_cursor_show
+}
+trap '_ui_exit_cleanup' EXIT

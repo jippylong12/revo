@@ -80,8 +80,7 @@ cmd_clone() {
         # Show spinner while cloning
         ui_spinner_start "Cloning $path... ($current/$total)"
 
-        local clone_err
-        if clone_err=$(git clone --quiet -- "$url" "$full_path" 2>&1); then
+        if git_clone "$url" "$full_path"; then
             ui_spinner_stop
             # Detect and store the repo's default branch
             local detected_branch
@@ -93,8 +92,8 @@ cmd_clone() {
             success_count=$((success_count + 1))
         else
             ui_spinner_error "Failed to clone: $path"
-            if [[ -n "$clone_err" ]]; then
-                ui_info "$(ui_dim "$clone_err")"
+            if [[ -n "$GIT_ERROR" ]]; then
+                ui_info "$(ui_dim "$GIT_ERROR")"
             fi
             fail_count=$((fail_count + 1))
         fi

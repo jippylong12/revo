@@ -7,7 +7,7 @@ REVO_CONFIG_FILE=""
 REVO_REPOS_DIR=""
 # When invoked from inside .revo/workspaces/<name>/, REVO_REPOS_DIR is
 # overridden to point at that workspace dir so existing commands (status,
-# commit, push, pr, exec, ...) operate on the workspace's copies of the
+# commit, push, pr, ...) operate on the workspace's copies of the
 # repos rather than the source tree under repos/. REVO_ACTIVE_WORKSPACE
 # holds the workspace name in that case (empty otherwise).
 REVO_ACTIVE_WORKSPACE=""
@@ -253,24 +253,6 @@ config_repo_count() {
     printf '%d' "$count"
 }
 
-# Check if repo directory exists
-# Usage: if config_repo_exists "repo_index"; then ...
-config_repo_exists() {
-    local idx="$1"
-    local path
-    path=$(yaml_get_path "$idx")
-    [[ -d "$REVO_REPOS_DIR/$path" ]]
-}
-
-# Get full path to repo
-# Usage: full_path=$(config_repo_full_path "repo_index")
-config_repo_full_path() {
-    local idx="$1"
-    local path
-    path=$(yaml_get_path "$idx")
-    printf '%s/%s' "$REVO_REPOS_DIR" "$path"
-}
-
 # Require workspace context
 # Usage: config_require_workspace || return 1
 # Prints error and returns 1 if not in workspace
@@ -280,14 +262,6 @@ config_require_workspace() {
         return 1
     fi
     config_load
-}
-
-# Check if path is inside workspace
-# Usage: if config_is_in_workspace "/some/path"; then ...
-config_is_in_workspace() {
-    local path="$1"
-    local root="$REVO_WORKSPACE_ROOT"
-    [[ "$path" == "$root" ]] || [[ "$path" == "$root/"* ]]
 }
 
 # Get workspace name

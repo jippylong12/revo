@@ -525,7 +525,7 @@ _workspace_write_claude_md() {
         printf '# revo workspace: %s\n' "$name"
         printf '\n'
         printf '> WARNING: This workspace contains .env files and other secrets\n'
-        printf '> hardlinked from the source repos. Never commit the .revo/\n'
+        printf '> copied from the source repos. Never commit the .revo/\n'
         printf '> directory.\n'
         printf '\n'
         printf -- '- **Branch:** %s\n' "$branch"
@@ -941,6 +941,8 @@ _workspace_clean() {
                 ws_db_name=$(_db_workspace_name "$db_name" "$name")
                 if _db_drop "$db_type" "$ws_db_name"; then
                     ui_step_done "Dropped DB:" "$ws_db_name ($db_type)"
+                else
+                    ui_step_error "Failed to drop DB: $ws_db_name - $DB_ERROR"
                 fi
             done
             rm -rf "$d"

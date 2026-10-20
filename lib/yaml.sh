@@ -542,13 +542,10 @@ yaml_path_from_url() {
     local url="$1"
     local name
 
-    # Handle SSH URLs: git@github.com:org/repo.git
+    # Last path segment, with or without .git:
+    #   git@github.com:org/repo.git, https://github.com/org/repo.git
     if [[ "$url" =~ ([^/:]+)\.git$ ]]; then
         name="${BASH_REMATCH[1]}"
-    # Handle HTTPS URLs: https://github.com/org/repo.git
-    elif [[ "$url" =~ /([^/]+)\.git$ ]]; then
-        name="${BASH_REMATCH[1]}"
-    # Handle URLs without .git
     elif [[ "$url" =~ ([^/:]+)$ ]]; then
         name="${BASH_REMATCH[1]}"
     else

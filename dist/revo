@@ -34,35 +34,23 @@ if [[ "$UI_UNICODE" -eq 1 ]]; then
     S_STEP_ACTIVE="◆"
     S_STEP_DONE="◇"
     S_STEP_ERROR="▲"
-    S_STEP_CANCEL="■"
     S_BAR="│"
     S_BAR_START="┌"
     S_BAR_END="└"
     S_SPINNER_FRAMES=("◒" "◐" "◓" "◑")
-    S_CHECKBOX_ON="◼"
-    S_CHECKBOX_OFF="◻"
-    S_RADIO_ON="●"
-    S_RADIO_OFF="○"
+    S_TABLE_RULE="─"
 else
     S_STEP_ACTIVE="*"
     S_STEP_DONE="+"
     S_STEP_ERROR="!"
-    S_STEP_CANCEL="x"
     S_BAR="|"
     S_BAR_START="/"
     S_BAR_END="\\"
     S_SPINNER_FRAMES=("-" "\\" "|" "/")
-    S_CHECKBOX_ON="[x]"
-    S_CHECKBOX_OFF="[ ]"
-    S_RADIO_ON="(*)"
-    S_RADIO_OFF="( )"
+    S_TABLE_RULE="-"
 fi
 
 # --- Colors ---
-ui_reset() {
-    [[ "$UI_COLOR" -eq 1 ]] && printf '\033[0m' || true
-}
-
 ui_cyan() {
     [[ "$UI_COLOR" -eq 1 ]] && printf '\033[36m%s\033[0m' "$1" || printf '%s' "$1"
 }
@@ -150,12 +138,6 @@ ui_step_error() {
     printf '%s  %s\n' "$(ui_yellow "$S_STEP_ERROR")" "$(ui_yellow "$message")"
 }
 
-# Step cancel
-ui_step_cancel() {
-    local message="$1"
-    printf '%s  %s\n' "$(ui_red "$S_STEP_CANCEL")" "$(ui_red "$message")"
-}
-
 # Info line (continuation)
 ui_info() {
     local message="$1"
@@ -165,119 +147,6 @@ ui_info() {
 # Empty bar line
 ui_bar_line() {
     printf '%s\n' "$(ui_bar)"
-}
-
-# --- Interactive Components ---
-
-# Text input
-# Usage: result=$(ui_text "Prompt" "default")
-# Returns: user input or default
-ui_text() {
-    local prompt="$1"
-    local default="${2:-}"
-    local input
-
-    ui_step "$prompt"
-    if [[ -n "$default" ]]; then
-        printf '%s  ' "$(ui_bar)"
-        read -r -p "" -e -i "$default" input
-    else
-        printf '%s  ' "$(ui_bar)"
-        read -r input
-    fi
-
-    # Return default if empty
-    if [[ -z "$input" ]]; then
-        input="$default"
-    fi
-
-    printf '%s' "$input"
-}
-
-# Confirm (y/n)
-# Usage: if ui_confirm "Question?"; then ... fi
-ui_confirm() {
-    local prompt="$1"
-    local default="${2:-y}"
-    local hint
-    local response
-
-    if [[ "$default" == "y" ]]; then
-        hint="Y/n"
-    else
-        hint="y/N"
-    fi
-
-    ui_step "$prompt ($hint)"
-    printf '%s  ' "$(ui_bar)"
-    read -r -n 1 response
-    printf '\n'
-
-    # Handle empty (use default)
-    if [[ -z "$response" ]]; then
-        response="$default"
-    fi
-
-    [[ "$response" =~ ^[Yy]$ ]]
-}
-
-# Select from options
-# Usage: result=$(ui_select "Prompt" "opt1" "opt2" "opt3")
-# Returns: selected option
-ui_select() {
-    local prompt="$1"
-    shift
-    local options=("$@")
-    local selected=0
-    local count=${#options[@]}
-    local key
-
-    ui_step "$prompt"
-
-    # Save cursor position and hide cursor
-    printf '\033[?25l'
-
-    while true; do
-        # Draw options
-        for i in "${!options[@]}"; do
-            if [[ $i -eq $selected ]]; then
-                printf '%s  %s %s\n' "$(ui_bar)" "$(ui_cyan "$S_RADIO_ON")" "${options[$i]}"
-            else
-                printf '%s  %s %s\n' "$(ui_bar)" "$(ui_dim "$S_RADIO_OFF")" "$(ui_dim "${options[$i]}")"
-            fi
-        done
-
-        # Read key
-        read -rsn1 key
-
-        # Handle arrow keys (escape sequences)
-        if [[ "$key" == $'\033' ]]; then
-            read -rsn2 key
-            case "$key" in
-                '[A') # Up
-                    ((selected > 0)) && ((selected--))
-                    ;;
-                '[B') # Down
-                    ((selected < count - 1)) && selected=$((selected + 1))
-                    ;;
-            esac
-        elif [[ "$key" == "" ]]; then
-            # Enter pressed
-            break
-        elif [[ "$key" == "j" ]]; then
-            ((selected < count - 1)) && selected=$((selected + 1))
-        elif [[ "$key" == "k" ]]; then
-            ((selected > 0)) && ((selected--))
-        fi
-
-        # Move cursor up to redraw
-        printf '\033[%dA' "$count"
-    done
-
-    # Show cursor
-    printf '\033[?25h'
-
-    printf '%s' "${options[$selected]}"
 }
 
 # --- Spinner ---
@@ -308,9 +177,6 @@ ui_spinner_start() {
         done
     ) &
     _SPINNER_PID=$!
-
-    # Ensure cleanup on script exit
-    trap 'ui_spinner_stop 2>/dev/null' EXIT
 }
 
 ui_spinner_stop() {
@@ -417,7 +283,7 @@ ui_table_header() {
         local dashes=""
         local j=0
         while [[ $j -lt $w ]]; do
-            dashes+="─"
+            dashes+="$S_TABLE_RULE"
             j=$((j + 1))
         done
         printf '%s' "$(ui_dim "$dashes")"
@@ -439,26 +305,7 @@ ui_table_row() {
     printf '\n'
 }
 
-# --- Utilities ---
-
-# Clear line
-ui_clear_line() {
-    [[ -t 1 ]] || return 0
-    printf '\r\033[K'
-}
-
-# Move cursor up N lines
-ui_cursor_up() {
-    [[ -t 1 ]] || return 0
-    local n="${1:-1}"
-    printf '\033[%dA' "$n"
-}
-
-# Hide cursor
-ui_cursor_hide() {
-    [[ -t 1 ]] || return 0
-    printf '\033[?25l'
-}
+# --- Exit cleanup ---
 
 # Show cursor
 ui_cursor_show() {
@@ -466,8 +313,17 @@ ui_cursor_show() {
     printf '\033[?25h'
 }
 
-# Ensure cursor is shown on exit
-trap 'ui_cursor_show' EXIT
+# Kill a running spinner and restore the cursor when the script exits for
+# any reason. One trap for both so neither registration clobbers the other.
+_ui_exit_cleanup() {
+    if [[ -n "${_SPINNER_PID:-}" ]] && kill -0 "$_SPINNER_PID" 2>/dev/null; then
+        kill "$_SPINNER_PID" 2>/dev/null
+        wait "$_SPINNER_PID" 2>/dev/null || true
+        [[ -t 1 ]] && printf '\r\033[K'
+    fi
+    ui_cursor_show
+}
+trap '_ui_exit_cleanup' EXIT
 
 # === lib/yaml.sh ===
 # Revo CLI - Minimal YAML Parser
@@ -1013,13 +869,10 @@ yaml_path_from_url() {
     local url="$1"
     local name
 
-    # Handle SSH URLs: git@github.com:org/repo.git
+    # Last path segment, with or without .git:
+    #   git@github.com:org/repo.git, https://github.com/org/repo.git
     if [[ "$url" =~ ([^/:]+)\.git$ ]]; then
         name="${BASH_REMATCH[1]}"
-    # Handle HTTPS URLs: https://github.com/org/repo.git
-    elif [[ "$url" =~ /([^/]+)\.git$ ]]; then
-        name="${BASH_REMATCH[1]}"
-    # Handle URLs without .git
     elif [[ "$url" =~ ([^/:]+)$ ]]; then
         name="${BASH_REMATCH[1]}"
     else
@@ -1339,7 +1192,7 @@ REVO_CONFIG_FILE=""
 REVO_REPOS_DIR=""
 # When invoked from inside .revo/workspaces/<name>/, REVO_REPOS_DIR is
 # overridden to point at that workspace dir so existing commands (status,
-# commit, push, pr, exec, ...) operate on the workspace's copies of the
+# commit, push, pr, ...) operate on the workspace's copies of the
 # repos rather than the source tree under repos/. REVO_ACTIVE_WORKSPACE
 # holds the workspace name in that case (empty otherwise).
 REVO_ACTIVE_WORKSPACE=""
@@ -1585,24 +1438,6 @@ config_repo_count() {
     printf '%d' "$count"
 }
 
-# Check if repo directory exists
-# Usage: if config_repo_exists "repo_index"; then ...
-config_repo_exists() {
-    local idx="$1"
-    local path
-    path=$(yaml_get_path "$idx")
-    [[ -d "$REVO_REPOS_DIR/$path" ]]
-}
-
-# Get full path to repo
-# Usage: full_path=$(config_repo_full_path "repo_index")
-config_repo_full_path() {
-    local idx="$1"
-    local path
-    path=$(yaml_get_path "$idx")
-    printf '%s/%s' "$REVO_REPOS_DIR" "$path"
-}
-
 # Require workspace context
 # Usage: config_require_workspace || return 1
 # Prints error and returns 1 if not in workspace
@@ -1612,14 +1447,6 @@ config_require_workspace() {
         return 1
     fi
     config_load
-}
-
-# Check if path is inside workspace
-# Usage: if config_is_in_workspace "/some/path"; then ...
-config_is_in_workspace() {
-    local path="$1"
-    local root="$REVO_WORKSPACE_ROOT"
-    [[ "$path" == "$root" ]] || [[ "$path" == "$root/"* ]]
 }
 
 # Get workspace name
@@ -1683,7 +1510,7 @@ git_clone() {
         return 1
     fi
 
-    if GIT_OUTPUT=$(git clone --progress -- "$url" "$target" 2>&1); then
+    if GIT_OUTPUT=$(git clone --quiet -- "$url" "$target" 2>&1); then
         return 0
     else
         GIT_ERROR="$GIT_OUTPUT"
@@ -1925,46 +1752,6 @@ git_branch_exists() {
     git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$branch_name"
 }
 
-# Stash changes
-# Usage: git_stash "repo_dir"
-git_stash() {
-    local repo_dir="$1"
-
-    GIT_OUTPUT=""
-    GIT_ERROR=""
-
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" stash 2>&1); then
-        GIT_ERROR="$GIT_OUTPUT"
-        return 1
-    fi
-
-    return 0
-}
-
-# Pop stash
-# Usage: git_stash_pop "repo_dir"
-git_stash_pop() {
-    local repo_dir="$1"
-
-    GIT_OUTPUT=""
-    GIT_ERROR=""
-
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" stash pop 2>&1); then
-        GIT_ERROR="$GIT_OUTPUT"
-        return 1
-    fi
-
-    return 0
-}
-
-# Get short commit hash
-# Usage: hash=$(git_short_hash "repo_dir")
-git_short_hash() {
-    local repo_dir="$1"
-
-    git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null
-}
-
 # Run arbitrary git command
 # Usage: git_exec "repo_dir" "command" "args..."
 git_exec() {
@@ -2043,13 +1830,7 @@ _scan_json_string() {
     printf '%s' "$line"
 }
 
-# Returns 0 if the package.json has "dep_name" anywhere in a dependencies block
-_scan_pkg_has_dep() {
-    local file="$1"
-    local dep="$2"
-    grep -qF "\"$dep\"" "$file" 2>/dev/null
-}
-
+# Returns 0 if the flattened package.json text mentions "dep_name"
 _scan_text_has_dep() {
     local text="$1"
     local dep="$2"
@@ -2888,29 +2669,6 @@ _db_drop() {
     esac
 }
 
-# Check if a database exists
-# Returns 0 if exists, 1 if not
-_db_exists() {
-    local db_type="$1"
-    local db_name="$2"
-
-    _db_check_tool "$db_type" || return 1
-
-    case "$db_type" in
-        postgres)
-            psql -lqt </dev/null 2>/dev/null | cut -d '|' -f 1 | grep -qw "$db_name"
-            ;;
-        mongodb)
-            local mongo_cmd="mongosh"
-            command -v mongosh >/dev/null 2>&1 || mongo_cmd="mongo"
-            $mongo_cmd --quiet --eval "db.getMongo().getDBNames()" </dev/null 2>/dev/null | grep -qw "$db_name"
-            ;;
-        mysql)
-            mysqlshow "$db_name" </dev/null >/dev/null 2>&1
-            ;;
-    esac
-}
-
 # === lib/commands/init.sh ===
 # Revo CLI - init command
 # Initializes a workspace and auto-detects existing git repos in the current
@@ -3093,26 +2851,79 @@ _init_write_agent_files() {
     IFS="$old_ifs"
 }
 
-cmd_init() {
-    local workspace_name=""
-    local _orig_command="init"
+# Register every git repo found by _init_scan_existing in the in-memory
+# config: derive tags, default branch, and database settings, and symlink
+# root-level repos into repos/. Does not save; callers run config_save.
+# Sets _INIT_DETECTED_COUNT. Shared by `revo init` and `revo detect`.
+_INIT_DETECTED_COUNT=0
+_init_detect_repos() {
+    _INIT_DETECTED_COUNT=0
+    _init_scan_existing
+    [[ -z "$_INIT_FOUND_DIRS" ]] && return 0
 
-    # Parse internal --_command flag (set by dispatcher to distinguish
-    # revo init / revo context / revo detect)
-    if [[ "${1:-}" == "--_command" ]]; then
-        _orig_command="${2:-init}"
-        shift 2
-    fi
-
-    # Already initialized? Route based on original command.
-    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
-        # revo context / revo detect — just regenerate
-        if [[ "$_orig_command" != "init" ]]; then
-            cmd_context "$@"
-            return $?
+    local dir name remote tags branch
+    while IFS= read -r dir; do
+        [[ -z "$dir" ]] && continue
+        name=$(basename "$dir")
+        remote=$(git -C "$dir" remote get-url origin 2>/dev/null || true)
+        if [[ -z "$remote" ]]; then
+            ui_step_error "Skipping $name (no git remote)"
+            continue
         fi
 
-        # revo init — list repos and prompt Claude to set descriptions
+        # If the repo lives at the workspace root (not under repos/),
+        # link it into repos/ so the rest of revo's data model — which
+        # always resolves $REVO_REPOS_DIR/$path — works without copying
+        # or moving files.
+        if [[ "$dir" != repos/* ]] && [[ ! -e "repos/$name" ]]; then
+            ln -s "../$name" "repos/$name"
+        fi
+
+        tags=$(_init_auto_tags "$dir" "$name")
+        branch=$(git_default_branch "$dir")
+
+        # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
+        scan_reset
+        scan_repo "$dir"
+
+        yaml_add_repo "$remote" "$name" "$tags" "" "$branch" \
+            "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
+
+        ui_step_done "Detected:" "$name → $remote (branch: $branch)"
+        if [[ -n "$SCAN_DB_TYPE" ]]; then
+            if [[ -n "$SCAN_DB_NAME" ]]; then
+                ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
+            else
+                ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
+            fi
+        fi
+        _INIT_DETECTED_COUNT=$((_INIT_DETECTED_COUNT + 1))
+    done <<< "$_INIT_FOUND_DIRS"
+
+    return 0
+}
+
+cmd_init() {
+    local workspace_name=""
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --help|-h)
+                printf 'Usage: revo init\n\n'
+                printf 'Initialize a workspace in the current directory. Existing git repos\n'
+                printf 'here and under repos/ are added to revo.yaml automatically.\n'
+                printf 'In an initialized workspace, lists repos and the next steps.\n'
+                return 0
+                ;;
+            *)
+                ui_step_error "Unknown option: $1"
+                return 1
+                ;;
+        esac
+    done
+
+    # Already initialized — list repos and prompt the agent to set descriptions
+    if [[ -f "revo.yaml" ]] || [[ -f "mars.yaml" ]]; then
         config_require_workspace || return 1
 
         ui_intro "Revo - Workspace Setup"
@@ -3173,57 +2984,11 @@ cmd_init() {
     ui_step_done "Created repos/ directory"
 
     # Auto-detect existing git repos in the current directory.
-    _init_scan_existing
-    local detected_count=0
-    if [[ -n "$_INIT_FOUND_DIRS" ]]; then
-        local dir name remote tags path
-        while IFS= read -r dir; do
-            [[ -z "$dir" ]] && continue
-            name=$(basename "$dir")
-            remote=$(cd "$dir" && git remote get-url origin 2>/dev/null || true)
-            if [[ -z "$remote" ]]; then
-                ui_step_error "Skipping $name (no git remote)"
-                continue
-            fi
-
-            path="$name"
-
-            # If the repo lives at the workspace root (not under repos/),
-            # link it into repos/ so the rest of revo's data model — which
-            # always resolves $REVO_REPOS_DIR/$path — works without copying
-            # or moving files.
-            if [[ "$dir" != repos/* ]]; then
-                if [[ ! -e "repos/$name" ]]; then
-                    ln -s "../$name" "repos/$name"
-                fi
-            fi
-
-            tags=$(_init_auto_tags "$dir" "$name")
-            local branch
-            branch=$(git_default_branch "$dir")
-
-            # Scan repo for database config (populates SCAN_DB_TYPE/SCAN_DB_NAME)
-            scan_reset
-            scan_repo "$dir"
-
-            yaml_add_repo "$remote" "$path" "$tags" "" "$branch" \
-                "$SCAN_DB_TYPE" "$SCAN_DB_NAME"
-
-            ui_step_done "Detected:" "$name → $remote (branch: $branch)"
-            if [[ -n "$SCAN_DB_TYPE" ]]; then
-                if [[ -n "$SCAN_DB_NAME" ]]; then
-                    ui_info "$(ui_dim "  Database: $SCAN_DB_NAME ($SCAN_DB_TYPE)")"
-                else
-                    ui_info "$(ui_dim "  Database: $SCAN_DB_TYPE (name not detected — edit revo.yaml)")"
-                fi
-            fi
-            detected_count=$((detected_count + 1))
-        done <<< "$_INIT_FOUND_DIRS"
-
-        if [[ $detected_count -gt 0 ]]; then
-            config_save
-            ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
-        fi
+    _init_detect_repos
+    local detected_count=$_INIT_DETECTED_COUNT
+    if [[ $detected_count -gt 0 ]]; then
+        config_save
+        ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
     fi
 
     # If we detected repos, write basic agent files and prompt the agent to
@@ -3255,8 +3020,9 @@ cmd_init() {
 # === lib/commands/detect.sh ===
 # Revo CLI - detect command
 # Bootstraps a workspace around git repos that already exist in the current
-# directory. Use this when you have a parent folder full of clones and want
-# revo to wrap them without re-cloning.
+# directory (and under repos/) without prompting: the workspace is named after
+# the directory, repos are registered with the same auto-detection `revo init`
+# uses, and the agent files are generated immediately.
 
 cmd_detect() {
     while [[ $# -gt 0 ]]; do
@@ -3264,8 +3030,8 @@ cmd_detect() {
             --help|-h)
                 printf 'Usage: revo detect\n\n'
                 printf 'Auto-detect git repositories in the current directory and\n'
-                printf 'bootstrap a revo workspace around them. Generates revo.yaml\n'
-                printf 'and configured agent files from what it finds.\n'
+                printf 'bootstrap a revo workspace around them without prompts.\n'
+                printf 'Generates revo.yaml and the configured agent files.\n'
                 return 0
                 ;;
             *)
@@ -3281,7 +3047,6 @@ cmd_detect() {
     fi
 
     ui_intro "Revo - Detect Existing Repositories"
-    ui_step "Scanning for git repos..."
 
     # Initialize the workspace using the cwd basename. This sets
     # REVO_WORKSPACE_ROOT/REVO_CONFIG_FILE/REVO_REPOS_DIR and writes an empty
@@ -3293,98 +3058,21 @@ cmd_detect() {
         return 1
     fi
 
-    local found=0
-    local d name remote category tags
+    _init_detect_repos
 
-    for d in */; do
-        d="${d%/}"
-        [[ "$d" == "repos" ]] && continue
-        [[ "$d" == ".revo" ]] && continue
-        [[ -d "$d/.git" ]] || continue
-
-        name="$d"
-        remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
-
-        # Auto-categorize from package contents.
-        category=""
-        if [[ -f "$d/package.json" ]]; then
-            local pkg_text
-            pkg_text=$(tr '\n' ' ' < "$d/package.json" 2>/dev/null || true)
-            if _scan_text_has_dep "$pkg_text" "next" || _scan_text_has_dep "$pkg_text" "nuxt" \
-                || _scan_text_has_dep "$pkg_text" "react" || _scan_text_has_dep "$pkg_text" "vue" \
-                || _scan_text_has_dep "$pkg_text" "svelte" || _scan_text_has_dep "$pkg_text" "@angular/core" \
-                || _scan_text_has_dep "$pkg_text" "astro" || _scan_text_has_dep "$pkg_text" "@remix-run/react" \
-                || _scan_text_has_dep "$pkg_text" "@sveltejs/kit" || _scan_text_has_dep "$pkg_text" "expo" \
-                || _scan_text_has_dep "$pkg_text" "react-native"; then
-                category="frontend"
-            elif _scan_text_has_dep "$pkg_text" "express" || _scan_text_has_dep "$pkg_text" "fastify" \
-                || _scan_text_has_dep "$pkg_text" "hono" || _scan_text_has_dep "$pkg_text" "@nestjs/core" \
-                || _scan_text_has_dep "$pkg_text" "nestjs" || _scan_text_has_dep "$pkg_text" "koa"; then
-                category="backend"
-            fi
-        elif [[ -f "$d/go.mod" ]] || [[ -f "$d/Cargo.toml" ]] || [[ -f "$d/pom.xml" ]] || [[ -f "$d/build.gradle" ]] || [[ -f "$d/build.gradle.kts" ]]; then
-            category="backend"
-        elif [[ -f "$d/pyproject.toml" ]] || [[ -f "$d/requirements.txt" ]]; then
-            category="backend"
-        fi
-
-        if [[ -n "$category" ]] && [[ "$category" != "$name" ]]; then
-            tags="$name, $category"
-        else
-            tags="$name"
-        fi
-
-        # Link the root-level repo into repos/ so the rest of revo's data
-        # model (which always resolves $REVO_REPOS_DIR/$path) works.
-        if [[ ! -e "repos/$name" ]]; then
-            ln -s "../$name" "repos/$name"
-        fi
-
-        local branch
-        branch=$(git_default_branch "$d")
-        yaml_add_repo "$remote" "$name" "$tags" "" "$branch"
-        ui_step_done "Found:" "$name ($remote, branch: $branch)"
-        found=$((found + 1))
-    done
-
-    if [[ -d "repos" ]]; then
-        for d in repos/*/; do
-            d="${d%/}"
-            [[ -d "$d/.git" ]] || continue
-            name=$(basename "$d")
-            # Skip repos already added via symlink in the loop above.
-            local already=0
-            local i
-            for ((i = 0; i < YAML_REPO_COUNT; i++)); do
-                if [[ "$(yaml_get_path "$i")" == "$name" ]]; then
-                    already=1
-                    break
-                fi
-            done
-            [[ $already -eq 1 ]] && continue
-            remote=$(cd "$d" && git remote get-url origin 2>/dev/null || echo "local://$d")
-            local branch
-            branch=$(git_default_branch "$d")
-            yaml_add_repo "$remote" "$name" "$name" "" "$branch"
-            ui_step_done "Found:" "$name ($remote, branch: $branch)"
-            found=$((found + 1))
-        done
-    fi
-
-    if [[ $found -eq 0 ]]; then
+    if [[ $_INIT_DETECTED_COUNT -eq 0 ]]; then
         rm -f "$REVO_CONFIG_FILE"
-        ui_step_error "No git repos found in current directory. Use 'revo init' instead."
+        ui_step_error "No git repos with a remote found here. Use 'revo init' instead."
         ui_outro_cancel "Nothing to detect"
         return 1
     fi
 
     config_save
-    ui_step_done "Detected $found repository(ies)"
+    ui_step_done "Detected:" "$_INIT_DETECTED_COUNT repository(ies)"
     ui_info "$(ui_dim "Edit revo.yaml to adjust tags or add depends_on relationships")"
     ui_bar_line
 
-    cmd_context
-    return 0
+    cmd_context --auto
 }
 
 # === lib/commands/clone.sh ===
@@ -3469,8 +3157,7 @@ cmd_clone() {
         # Show spinner while cloning
         ui_spinner_start "Cloning $path... ($current/$total)"
 
-        local clone_err
-        if clone_err=$(git clone --quiet -- "$url" "$full_path" 2>&1); then
+        if git_clone "$url" "$full_path"; then
             ui_spinner_stop
             # Detect and store the repo's default branch
             local detected_branch
@@ -3482,8 +3169,8 @@ cmd_clone() {
             success_count=$((success_count + 1))
         else
             ui_spinner_error "Failed to clone: $path"
-            if [[ -n "$clone_err" ]]; then
-                ui_info "$(ui_dim "$clone_err")"
+            if [[ -n "$GIT_ERROR" ]]; then
+                ui_info "$(ui_dim "$GIT_ERROR")"
             fi
             fail_count=$((fail_count + 1))
         fi
@@ -4006,6 +3693,15 @@ cmd_add() {
 
     if [[ -z "$url" ]]; then
         ui_step_error "Usage: revo add <url> [--tags tag1,tag2] [--path custom-path] [--depends-on repo1,repo2] [--database type:name]"
+        return 1
+    fi
+
+    # The URL is written unquoted to revo.yaml and handed to git clone.
+    # Whitespace or '#' would be cut off on re-parse; a leading '-' looks
+    # like a git option.
+    if [[ "$url" == -* ]] || [[ "$url" =~ [[:space:][:cntrl:]\#] ]]; then
+        ui_step_error "Invalid repository URL: $url"
+        ui_info "$(ui_dim "URLs must not start with '-' or contain spaces or '#'.")"
         return 1
     fi
 
@@ -5324,7 +5020,7 @@ cmd_feature() {
         local msg="Feature '$name' ready on $success_count repo(s)"
         [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
         ui_info "$(ui_dim "Next: edit .revo/features/$name.md with the plan,")"
-        ui_info "$(ui_dim "then ask Claude Code to work in $REVO_WORKSPACE_ROOT")"
+        ui_info "$(ui_dim "then point your coding agent at $REVO_WORKSPACE_ROOT")"
         ui_outro "$msg"
     else
         ui_outro_cancel "$success_count succeeded, $fail_count failed"
@@ -5677,10 +5373,13 @@ cmd_pr() {
             continue
         fi
 
-        local branch
+        local branch default_branch
         branch=$(git_current_branch "$full_path")
-        if [[ -z "$branch" ]] || [[ "$branch" == "main" ]] || [[ "$branch" == "master" ]]; then
-            ui_step_done "Skipped (on main/master):" "$path"
+        default_branch=$(config_repo_default_branch "$repo")
+        if [[ -z "$branch" ]] || [[ "$branch" == "HEAD" ]] \
+            || [[ "$branch" == "$default_branch" ]] \
+            || [[ "$branch" == "main" ]] || [[ "$branch" == "master" ]]; then
+            ui_step_done "Skipped (on default branch):" "$path"
             skip_count=$((skip_count + 1))
             continue
         fi
@@ -6747,7 +6446,7 @@ _workspace_write_claude_md() {
         printf '# revo workspace: %s\n' "$name"
         printf '\n'
         printf '> WARNING: This workspace contains .env files and other secrets\n'
-        printf '> hardlinked from the source repos. Never commit the .revo/\n'
+        printf '> copied from the source repos. Never commit the .revo/\n'
         printf '> directory.\n'
         printf '\n'
         printf -- '- **Branch:** %s\n' "$branch"
@@ -7163,6 +6862,8 @@ _workspace_clean() {
                 ws_db_name=$(_db_workspace_name "$db_name" "$name")
                 if _db_drop "$db_type" "$ws_db_name"; then
                     ui_step_done "Dropped DB:" "$ws_db_name ($db_type)"
+                else
+                    ui_step_error "Failed to drop DB: $ws_db_name - $DB_ERROR"
                 fi
             done
             rm -rf "$d"
@@ -7374,8 +7075,10 @@ Revo - Agent-first multi-repo workspace manager v$REVO_VERSION
 Usage: revo <command> [options]
 
 Setup:
-  init                        Initialize workspace or regenerate agent files
-  add URL [options]            Add a repository to the workspace
+  init                        Initialize workspace (auto-detects existing repos)
+  detect                      Bootstrap a workspace around existing clones (no prompts)
+  context [--auto|--analyze]  Regenerate agent files (AGENTS.md, CLAUDE.md)
+  add URL [options]           Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
 
 Repos:
@@ -7390,7 +7093,7 @@ Features & Workspaces:
   workspace NAME [--tag TAG]  Create isolated workspace with DB cloning
   workspace NAME --delete     Delete a workspace (use --force to discard work)
   workspace --clean           Remove workspaces whose branches are merged
-  workspace list              List active workspaces
+  workspace list              List active workspaces (alias: workspaces)
 
 Ship:
   commit MSG [--tag TAG]      Commit changes across dirty repos
@@ -7402,7 +7105,7 @@ Ship:
 Options:
   --tag TAG       Filter repositories by tag
   --tags TAGS     Comma-separated list of tags (for add)
-  --force, -f     Force operation (clone, checkout)
+  --force, -f     Force operation (clone, checkout, workspace)
   --rebase, -r    Use rebase when syncing
   --body TEXT     PR body (pr)
   --help, -h      Show this help
@@ -7413,7 +7116,7 @@ Examples:
   revo add git@github.com:org/shared-types.git --tags shared
   revo add git@github.com:org/backend.git --tags backend,api
   revo clone
-  revo init                                       # regenerate agent files
+  revo context --auto                             # regenerate agent files
   revo feature clock-student --tag backend        # coordinated branch
   revo commit "wire up clock endpoint"
   revo push
@@ -7449,8 +7152,14 @@ main() {
     shift || true
 
     case "$command" in
-        init|detect|context)
-            cmd_init --_command "$command" "$@"
+        init)
+            cmd_init "$@"
+            ;;
+        detect)
+            cmd_detect "$@"
+            ;;
+        context)
+            cmd_context "$@"
             ;;
         clone)
             cmd_clone "$@"

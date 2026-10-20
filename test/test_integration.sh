@@ -276,7 +276,7 @@ test_git_clone_helper_separates_option_like_url() {
 
     PATH="$old_path"
 
-    if grep -qF 'git <clone> <--progress> <--> <--upload-pack=/tmp/revo-pwn>' "$log"; then
+    if grep -qF 'git <clone> <--quiet> <--> <--upload-pack=/tmp/revo-pwn>' "$log"; then
         test_pass
     else
         test_fail "git_clone did not put -- before option-like URL"
@@ -898,6 +898,84 @@ test_issue_none_provider_blocks_gh() {
     fi
 }
 
+test_detect_bootstraps_existing_repos() {
+    test_start "revo detect - bootstraps workspace around existing clones"
+
+    setup_test_dir
+    setup_local_git_repo "api"
+    git -C "api" remote add origin "git@github.com:test/api.git"
+    mkdir -p "no-remote"
+    git -C "no-remote" init > /dev/null 2>&1
+
+    local output
+    output=$($REVO_CMD detect 2>&1 < /dev/null) || {
+        test_fail "revo detect exited non-zero: $output"
+        return 1
+    }
+
+    if [[ -f "revo.yaml" ]] \
+        && grep -q "url: git@github.com:test/api.git" revo.yaml \
+        && grep -q "tags: \[api" revo.yaml \
+        && [[ -L "repos/api" ]] \
+        && [[ -f "CLAUDE.md" ]] && grep -q "### api" CLAUDE.md \
+        && echo "$output" | grep -q "Skipping no-remote"; then
+        test_pass
+    else
+        test_fail "detect did not register the repo or generate context: $output"
+    fi
+}
+
+test_detect_refuses_initialized_workspace() {
+    test_start "revo detect - refuses an initialized workspace"
+
+    setup_test_dir
+    echo "detect-twice" | $REVO_CMD init > /dev/null 2>&1
+
+    local output
+    if output=$($REVO_CMD detect 2>&1); then
+        test_fail "detect should fail when revo.yaml exists"
+    elif echo "$output" | grep -q "already initialized"; then
+        test_pass
+    else
+        test_fail "unexpected output: $output"
+    fi
+}
+
+test_context_outside_workspace_errors() {
+    test_start "revo context - errors outside a workspace"
+
+    setup_test_dir
+
+    local output
+    if output=$($REVO_CMD context --auto 2>&1 < /dev/null); then
+        test_fail "context should fail outside a workspace"
+    elif echo "$output" | grep -q "Not in a Revo workspace" && [[ ! -f "revo.yaml" ]]; then
+        test_pass
+    else
+        test_fail "unexpected output: $output"
+    fi
+}
+
+test_add_rejects_unsafe_url() {
+    test_start "revo add - rejects option-like and unparseable URLs"
+
+    setup_test_dir
+    echo "url-guard" | $REVO_CMD init > /dev/null 2>&1
+
+    local bad ok=1
+    for bad in "--upload-pack=/tmp/pwn" "git@github.com:org/a b.git" "https://example.com/x.git#frag"; do
+        if $REVO_CMD add "$bad" > /dev/null 2>&1; then
+            ok=0
+        fi
+    done
+
+    if [[ $ok -eq 1 ]] && ! grep -q "upload-pack\|example.com" revo.yaml; then
+        test_pass
+    else
+        test_fail "unsafe URL was accepted"
+    fi
+}
+
 test_feature_creates_file() {
     test_start "revo feature - writes .revo/features file"
 
@@ -997,6 +1075,7 @@ test_git_clone_helper_separates_option_like_url
 test_init_creates_files
 test_add_repo
 test_add_rejects_traversal_path
+test_add_rejects_unsafe_url
 test_add_with_depends_on
 test_list_repos
 test_status_not_cloned
@@ -1017,6 +1096,9 @@ test_context_preserves_user_content
 test_context_preserves_agents_user_content
 test_context_idempotent_no_duplication
 test_context_does_not_emit_env_secret_values
+test_context_outside_workspace_errors
+test_detect_bootstraps_existing_repos
+test_detect_refuses_initialized_workspace
 test_issue_list_json_flat_array
 test_issue_list_human_calls_gh_once_per_repo
 test_issue_linear_provider_blocks_gh

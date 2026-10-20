@@ -91,10 +91,13 @@ cmd_pr() {
             continue
         fi
 
-        local branch
+        local branch default_branch
         branch=$(git_current_branch "$full_path")
-        if [[ -z "$branch" ]] || [[ "$branch" == "main" ]] || [[ "$branch" == "master" ]]; then
-            ui_step_done "Skipped (on main/master):" "$path"
+        default_branch=$(config_repo_default_branch "$repo")
+        if [[ -z "$branch" ]] || [[ "$branch" == "HEAD" ]] \
+            || [[ "$branch" == "$default_branch" ]] \
+            || [[ "$branch" == "main" ]] || [[ "$branch" == "master" ]]; then
+            ui_step_done "Skipped (on default branch):" "$path"
             skip_count=$((skip_count + 1))
             continue
         fi

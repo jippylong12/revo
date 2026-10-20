@@ -130,7 +130,7 @@ add_to_path() {
 # Main installation
 main() {
     printf "\n"
-    printf "${CYAN}┌${RESET}  Revo - Claude-first Multi-Repo Workspace Manager Installer\n"
+    printf "${CYAN}┌${RESET}  Revo - Agent-first Multi-Repo Workspace Manager Installer\n"
     printf "${DIM}│${RESET}\n"
 
     # Check requirements

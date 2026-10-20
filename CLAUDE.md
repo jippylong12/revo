@@ -8,7 +8,7 @@ Revo is an agent-first multi-repo workspace manager — a fork of [Mars](https:/
 with additions that make coding agents more effective across repositories.
 
 It is written in Bash (3.2+, macOS compatible) with no external dependencies
-beyond `git` (and optionally `gh` for `revo pr`).
+beyond `git` (and optionally `gh` for `revo pr` and `revo issue`).
 
 ### Relationship to Mars
 
@@ -20,11 +20,20 @@ Mars provides the workspace layer: `init`, `add`, `clone`, `status`, `sync`,
   full picture of the workspace (frameworks, routes, dependency order, active
   feature briefs, tracker provider, and a built-in revo command reference).
 - **`revo detect`** — bootstraps a workspace around git repos that already
-  exist in the current directory (the "I have a folder full of clones" case).
+  exist in the current directory (the "I have a folder full of clones" case)
+  without prompts, then runs `revo context --auto`. It shares the repo
+  detection code with `revo init` (`_init_detect_repos` in `init.sh`).
 - **`revo feature <name>`** — creates a coordinated `feature/<name>` branch
   across repos and writes `.revo/features/<name>.md` as shared context.
 - **`revo commit`**, **`revo push`**, **`revo pr`** — coordinated commit,
   push, and GitHub PR creation across matching repos.
+- **`revo issue`** — list and create GitHub issues across repos when
+  `tracker.provider` is `github`.
+- **`revo workspace`** — isolated full copies of the repos under
+  `.revo/workspaces/<name>/` with optional database cloning.
+
+There is deliberately no `revo exec`. Mars had one; it was removed as an
+arbitrary shell surface and `test/test_integration.sh` asserts it stays gone.
 - **`depends_on`** field in `revo.yaml` — drives the dependency order in the
   generated agent files.
 
@@ -64,6 +73,9 @@ fallback for migration.
 # Run tests (custom bash harness, no framework)
 bash test/test_yaml.sh
 bash test/test_config.sh
+bash test/test_scan.sh
+bash test/test_db.sh
+bash test/test_workspace.sh
 bash test/test_integration.sh
 ```
 
@@ -92,12 +104,13 @@ lib/
     ├── sync.sh
     ├── branch.sh
     ├── checkout.sh
-    ├── exec.sh
     ├── context.sh    # agent-first commands (new in Revo)
     ├── feature.sh
     ├── commit.sh
     ├── push.sh
-    └── pr.sh
+    ├── pr.sh
+    ├── issue.sh
+    └── workspace.sh  # workspace / workspaces commands
 ```
 
 ### Key Patterns

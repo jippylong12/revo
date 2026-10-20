@@ -174,6 +174,7 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | Command | Description |
 |---------|-------------|
 | `revo init` | Initialize workspace, detect repos, prompt for descriptions |
+| `revo detect` | Bootstrap a workspace around existing clones without prompts |
 | `revo context [--auto]` | Regenerate configured agent files (interactive by default, `--auto` skips prompts) |
 | `revo context --analyze` | Output detailed per-repo scan report |
 | `revo add <url> [options]` | Add a repo (`--tags`, `--depends-on`, `--database type:name`) |
@@ -182,7 +183,7 @@ When you `revo commit` inside a workspace, it auto-appends to `.revo/features/<n
 | `revo workspace <name>` | Create isolated workspace with DB cloning |
 | `revo workspace <name> --delete [--force]` | Delete a workspace and drop its workspace databases |
 | `revo workspace --clean` | Remove workspaces whose branches are merged |
-| `revo workspace list` | List active workspaces |
+| `revo workspace list` | List active workspaces (alias: `revo workspaces`) |
 | `revo commit <msg>` | Commit across dirty repos |
 | `revo push` | Push branches across repos |
 | `revo pr <title>` | Create coordinated PRs via `gh` |

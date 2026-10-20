@@ -35,7 +35,7 @@ git_clone() {
         return 1
     fi
 
-    if GIT_OUTPUT=$(git clone --progress -- "$url" "$target" 2>&1); then
+    if GIT_OUTPUT=$(git clone --quiet -- "$url" "$target" 2>&1); then
         return 0
     else
         GIT_ERROR="$GIT_OUTPUT"
@@ -275,46 +275,6 @@ git_branch_exists() {
 
     git -C "$repo_dir" show-ref --verify --quiet "refs/heads/$branch_name" ||
     git -C "$repo_dir" show-ref --verify --quiet "refs/remotes/origin/$branch_name"
-}
-
-# Stash changes
-# Usage: git_stash "repo_dir"
-git_stash() {
-    local repo_dir="$1"
-
-    GIT_OUTPUT=""
-    GIT_ERROR=""
-
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" stash 2>&1); then
-        GIT_ERROR="$GIT_OUTPUT"
-        return 1
-    fi
-
-    return 0
-}
-
-# Pop stash
-# Usage: git_stash_pop "repo_dir"
-git_stash_pop() {
-    local repo_dir="$1"
-
-    GIT_OUTPUT=""
-    GIT_ERROR=""
-
-    if ! GIT_OUTPUT=$(git -C "$repo_dir" stash pop 2>&1); then
-        GIT_ERROR="$GIT_OUTPUT"
-        return 1
-    fi
-
-    return 0
-}
-
-# Get short commit hash
-# Usage: hash=$(git_short_hash "repo_dir")
-git_short_hash() {
-    local repo_dir="$1"
-
-    git -C "$repo_dir" rev-parse --short HEAD 2>/dev/null
 }
 
 # Run arbitrary git command

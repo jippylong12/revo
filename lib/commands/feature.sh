@@ -163,7 +163,7 @@ cmd_feature() {
         local msg="Feature '$name' ready on $success_count repo(s)"
         [[ $skip_count -gt 0 ]] && msg+=", $skip_count skipped"
         ui_info "$(ui_dim "Next: edit .revo/features/$name.md with the plan,")"
-        ui_info "$(ui_dim "then ask Claude Code to work in $REVO_WORKSPACE_ROOT")"
+        ui_info "$(ui_dim "then point your coding agent at $REVO_WORKSPACE_ROOT")"
         ui_outro "$msg"
     else
         ui_outro_cancel "$success_count succeeded, $fail_count failed"

@@ -1,5 +1,36 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- `revo detect` now runs its own command. It was routed through `revo init`,
+  so the non-interactive bootstrap path was unreachable; it now shares the
+  repo detection code with `revo init` and finishes with `revo context --auto`.
+- `revo context` outside a workspace reports "Not in a Revo workspace" instead
+  of starting the interactive `revo init` flow.
+- `revo pr` skips repos sitting on their configured default branch (and
+  detached HEAD), not only `main`/`master`.
+- `revo add` rejects URLs that start with `-` or contain whitespace or `#`,
+  which could not round-trip through `revo.yaml` or be passed safely to git.
+- The spinner no longer replaces the cursor-restore exit trap; one trap now
+  stops the spinner and restores the cursor.
+- `revo workspace --clean` reports failed database drops instead of silently
+  skipping them.
+- Table separators use `-` when the terminal has no Unicode support.
+
+### Changed
+- `revo --help` lists `detect`, `context`, and the `workspaces` alias.
+- `revo clone` goes through the shared `git_clone` wrapper (`--quiet`).
+- Removed unused code inherited from Mars: interactive `ui_select`,
+  `ui_text`, `ui_confirm`, `ui_progress` and cursor helpers, `git_stash`,
+  `git_stash_pop`, `git_short_hash`, `_db_exists` (which relied on an
+  unchecked `mysqlshow`), `_scan_pkg_has_dep`, and three unused config
+  helpers.
+- Docs no longer reference the removed `exec` command; module lists include
+  `db.sh`, `issue.sh`, and `workspace.sh`; CI runs every test suite and
+  checks that `dist/revo` is rebuilt. CODEOWNERS points at the maintainer's
+  GitHub handle. `.claude/settings.local.json` is no longer tracked.
+
 ## [2.1.0] - 2026-10-14
 
 ### Added

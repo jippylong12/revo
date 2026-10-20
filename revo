@@ -49,8 +49,10 @@ Revo - Agent-first multi-repo workspace manager v$REVO_VERSION
 Usage: revo <command> [options]
 
 Setup:
-  init                        Initialize workspace or regenerate agent files
-  add URL [options]            Add a repository to the workspace
+  init                        Initialize workspace (auto-detects existing repos)
+  detect                      Bootstrap a workspace around existing clones (no prompts)
+  context [--auto|--analyze]  Regenerate agent files (AGENTS.md, CLAUDE.md)
+  add URL [options]           Add a repository to the workspace
   clone [--tag TAG]           Clone configured repositories
 
 Repos:
@@ -65,7 +67,7 @@ Features & Workspaces:
   workspace NAME [--tag TAG]  Create isolated workspace with DB cloning
   workspace NAME --delete     Delete a workspace (use --force to discard work)
   workspace --clean           Remove workspaces whose branches are merged
-  workspace list              List active workspaces
+  workspace list              List active workspaces (alias: workspaces)
 
 Ship:
   commit MSG [--tag TAG]      Commit changes across dirty repos
@@ -77,7 +79,7 @@ Ship:
 Options:
   --tag TAG       Filter repositories by tag
   --tags TAGS     Comma-separated list of tags (for add)
-  --force, -f     Force operation (clone, checkout)
+  --force, -f     Force operation (clone, checkout, workspace)
   --rebase, -r    Use rebase when syncing
   --body TEXT     PR body (pr)
   --help, -h      Show this help
@@ -88,7 +90,7 @@ Examples:
   revo add git@github.com:org/shared-types.git --tags shared
   revo add git@github.com:org/backend.git --tags backend,api
   revo clone
-  revo init                                       # regenerate agent files
+  revo context --auto                             # regenerate agent files
   revo feature clock-student --tag backend        # coordinated branch
   revo commit "wire up clock endpoint"
   revo push
@@ -124,8 +126,14 @@ main() {
     shift || true
 
     case "$command" in
-        init|detect|context)
-            cmd_init --_command "$command" "$@"
+        init)
+            cmd_init "$@"
+            ;;
+        detect)
+            cmd_detect "$@"
+            ;;
+        context)
+            cmd_context "$@"
             ;;
         clone)
             cmd_clone "$@"

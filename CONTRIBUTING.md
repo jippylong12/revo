@@ -20,7 +20,8 @@ revo/
 │   ├── yaml.sh            # revo.yaml parser
 │   ├── config.sh          # Workspace detection and config loading
 │   ├── git.sh             # Git wrapper with output capture
-│   ├── scan.sh            # Framework/language detection (for revo context)
+│   ├── scan.sh            # Framework/language/database detection (for revo context)
+│   ├── db.sh              # Database clone/drop for workspace isolation
 │   └── commands/          # Command implementations
 │       ├── init.sh        # Mars-inherited commands (init now auto-detects existing repos)
 │       ├── detect.sh      # Bootstrap revo around a folder of existing clones
@@ -29,14 +30,15 @@ revo/
 │       ├── branch.sh
 │       ├── checkout.sh
 │       ├── sync.sh
-│       ├── exec.sh
 │       ├── add.sh
 │       ├── list.sh
 │       ├── context.sh     # Revo-specific commands
 │       ├── feature.sh
 │       ├── commit.sh
 │       ├── push.sh
-│       └── pr.sh
+│       ├── pr.sh
+│       ├── issue.sh
+│       └── workspace.sh
 ├── build.sh               # Build bundled distribution
 ├── install.sh             # Curl installer
 ├── dist/                  # Bundled distribution (committed)
@@ -53,14 +55,17 @@ revo/
 ### Fork Relationship
 
 Revo is a fork of [Mars](https://github.com/dean0x/mars). The workspace
-primitives (init/add/clone/status/sync/branch/checkout/exec/list) are Mars's;
-Revo adds the Claude-first commands (`context`, `feature`, `commit`, `push`,
-`pr`, `detect`) and the `depends_on` field in `revo.yaml`. Note that
-`init.sh` and `clone.sh` have diverged from Mars: `cmd_init` now auto-detects
-existing git repos and writes a Claude-first `CLAUDE.md`, and `cmd_clone`
-always regenerates the workspace context after a clone batch. Upstream Mars
-bug fixes for `lib/ui.sh`, `lib/yaml.sh`, `lib/config.sh`, `lib/git.sh`, and
-the unmodified commands can still be cherry-picked.
+primitives (init/add/clone/status/sync/branch/checkout/list) are Mars's;
+Revo adds the agent-first commands (`context`, `feature`, `commit`, `push`,
+`pr`, `issue`, `workspace`, `detect`) and the `depends_on` field in
+`revo.yaml`. Mars's `exec` command was removed on purpose (arbitrary shell
+surface) and a test asserts it stays out of the build. `init.sh` and
+`clone.sh` have diverged from Mars: `cmd_init` now auto-detects existing git
+repos and writes the configured agent files, and `cmd_clone` always
+regenerates the workspace context after a clone batch. `lib/ui.sh` keeps only
+the primitives revo uses (no interactive select/confirm widgets). Upstream
+Mars bug fixes for `lib/yaml.sh`, `lib/config.sh`, `lib/git.sh`, and the
+unmodified commands can still be cherry-picked.
 
 ### Key Patterns
 
@@ -93,9 +98,9 @@ YAML_REPO_DEPS=()
 
 **Command Pattern** — Each command is `cmd_<name>()` in its own file under `lib/commands/`.
 
-**No subshells for writes** — `revo context` writes directly to CLAUDE.md
-instead of building a string in a piped `while` loop, because subshells lose
-global variable updates in bash 3.2.
+**No subshells for writes** — `revo context` writes directly to the agent
+files instead of building a string in a piped `while` loop, because subshells
+lose global variable updates in bash 3.2.
 
 ### Implementation Constraints
 
@@ -104,16 +109,18 @@ global variable updates in bash 3.2.
 - Avoid subshells where possible (breaks global variable updates)
 - Check return codes explicitly and propagate errors
 - Use `ui_step_error()`/`ui_step_done()` for user feedback
-- No runtime dependencies beyond `git` (and optionally `gh` for `revo pr`)
+- No runtime dependencies beyond `git` (and optionally `gh` for `revo pr`
+  and `revo issue`)
 
 ## Running Tests
 
 ```bash
 bash test/test_yaml.sh
 bash test/test_config.sh
-bash test/test_integration.sh
 bash test/test_scan.sh
+bash test/test_db.sh
 bash test/test_workspace.sh
+bash test/test_integration.sh
 ```
 
 Tests use `/tmp/revo/` for temporary files. The integration suite invokes
